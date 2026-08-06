@@ -77,28 +77,33 @@ Mark items `[x]` as you complete them (manual, not auto-synced). Scope: local si
   - [x] MethodArgumentNotValidException → 400 with per-field messages
   - [x] All responses use consistent ErrorResponseDto shape
 
-## Runtime testing — NOT started (only `mvn compile` has been run)
-- [ ] Start the app successfully (watch the CORS + Authentication-import gotchas below)
-- [ ] Signup: success (201, token + refreshToken + userId returned)
-- [ ] Signup: duplicate email → 409
-- [ ] Signup: validation failure → 400 with field errors
-- [ ] Login: success (200, tokens returned)
-- [ ] Login: wrong password → 401
-- [ ] Login: email not found → 401 (same message as wrong password)
-- [ ] Login: correct creds but provider != LOCAL → 401 with clear rejection message
-- [ ] Refresh: valid refresh token → new access token
-- [ ] Refresh: expired/revoked/unknown refresh token → 401
-- [ ] Refresh: user.isActive = false → rejected
-- [ ] Logout: deletes the specific refresh token row (verify in DB)
-- [ ] Logout-all: without auth header → 401
-- [ ] Logout-all: with auth header → deletes all rows for that user (verify with multi-device test: 2 logins, 1 logout-all, both refresh tokens dead)
-- [ ] Protected endpoint, no Authorization header → 401
-- [ ] Protected endpoint, malformed/invalid token → 401
-- [ ] Protected endpoint, expired access token → 401
-- [ ] Protected endpoint, valid token → 200, principal is the right User
+## Runtime testing — app runs, core flows verified against real MySQL
+- [x] Start the app successfully
+- [x] Signup: success (201, token + refreshToken + userId returned)
+- [x] Signup: duplicate email → 409, correct ErrorResponseDto shape
+- [ ] Signup: validation failure → 400 with field errors (not yet tried)
+- [x] Login: success (200, tokens returned)
+- [x] Login: wrong password → 401, message "Invalid email or password"
+- [ ] Login: email not found → 401 same message (not yet tried — should behave same as wrong password per the code, worth confirming)
+- [ ] Login: correct creds but provider != LOCAL → 401 (can't test yet — no OAuth signup path exists to create such a user)
+- [x] Refresh: valid refresh token → 200, new access token, refreshToken null (not rotated)
+- [x] Refresh: invalid/unknown refresh token → 401 "Invalid or expired refresh token"
+- [x] Refresh: after logout, same token → 401 (confirms logout actually revokes, not just fake-succeeds)
+- [ ] Refresh: user.isActive = false → rejected (not yet tried — no way yet to flip isActive without direct DB edit)
+- [x] Logout: deletes the specific refresh token row → 204, verified via subsequent refresh returning 401
+- [ ] Logout-all: without auth header → 401 (not yet explicitly tried)
+- [x] Logout-all: with auth header → 204, revokes session(s) for that user
+- [ ] Multi-device logout-all test (2 logins, 1 logout-all, confirm BOTH refresh tokens die) — logout-all itself confirmed working, full multi-device proof not yet run
+- [ ] Protected endpoint (not logout-all), no/malformed/expired token → 401 — blocked: no other authenticated business endpoint exists yet to test against (JobApplication CRUD not built)
+
+## Bugs found & fixed during tonight's runtime testing
+- [x] **Stale `username` DB column** — `User.username` was renamed to `userFirstName`/`userLastName` earlier, but `ddl-auto: update` never drops/renames old columns, so the live `users` table still had a `NOT NULL username` column with nothing populating it. Every signup insert failed with `DataIntegrityViolationException`, which Spring forwarded to `/error` — itself behind the security filter chain — surfacing as a confusing empty `403` instead of a `500`. Fixed by dropping the column (later, the whole schema was dropped and rebuilt clean via `ddl-auto: update` after further entity changes).
+- [x] **`is_active`/`revoked` stored as `BIT(1)`** — Hibernate's default MySQL mapping for `Boolean`. Fixed with explicit `columnDefinition = "BOOL"` on both `User.isActive` and `RefreshToken.revoked` (MySQL has no real boolean type — `BOOL`/`BOOLEAN` are just aliases for `TINYINT(1)`, confirmed by direct test; this only changes how the type is declared/read, not the underlying `0`/`1` storage).
+- [x] **Missing `@Transactional` on logout methods** — `AuthService.logoutUser()` and `logoutFromAllDeviceOfUser()` call derived `deleteByToken`/`deleteByUser` repository methods, which (unlike `.save()`/`.findById()`) don't get automatic transaction handling. Without an active transaction, JPA threw `TransactionRequiredException` ("cannot reliably process 'remove' call"), again surfacing as an empty `403` via the protected `/error` page. Fixed by adding `@Transactional` to both methods.
 
 ## Not done yet
 - [ ] Scheduled cleanup job for expired refresh_tokens rows (@Scheduled + @EnableScheduling), calling the existing-but-unused `deleteByExpiresAtBefore`
+- [ ] Remaining untested cases above (validation failures, email-not-found on login, isActive=false paths, logout-all without auth header, full multi-device proof)
 - [ ] This checklist kept in sync as work continues (you're doing this manually — that's fine)
 
 ## Later / deferred on purpose
@@ -107,6 +112,7 @@ Mark items `[x]` as you complete them (manual, not auto-synced). Scope: local si
 - [ ] GET /api/auth/me → returns UserDto
 - [ ] Password reset flow (request-reset email + confirm-reset endpoint)
 - [ ] Roles/admin-moderator system — no UserDetailsService or role column yet; noted as a clean seam, won't require reworking the JWT filter
+- [ ] Refresh token rotation — currently expiresAt is fixed at creation and never extended, so an actively-used session still gets force-logged-out exactly 7 days after login, even with continuous activity. Rotation would either extend the same row's expiresAt or issue a new refresh token (deleting the old) on every successful /refresh call, so only a truly idle session (no refresh calls for 7 days) expires.
 
 ## Known housekeeping (low priority)
 - [ ] Rotate local MySQL root password (old value is in earlier git history; local dev DB only, not internet-exposed)
@@ -115,3 +121,6 @@ Mark items `[x]` as you complete them (manual, not auto-synced). Scope: local si
 - `UrlBasedCorsConfigurationSource` in this Spring version uses `registerCorsConfiguration(String, CorsConfiguration)`, not `registerCorsConfigurationFor`.
 - Watch IDE auto-import pulling in `org.apache.tomcat.util.net.openssl.ciphers.Authentication` instead of `org.springframework.security.core.Authentication` — same simple class name, wrong package, compiles-looking but wrong.
 - Servlet stack (`spring-boot-starter-web`), not reactive — never import from `org.springframework.web.cors.reactive.*`.
+- `ddl-auto: update` never drops/renames columns — renaming an entity field leaves the old DB column behind (NOT NULL and unpopulated = broken inserts). After any entity field rename, check the actual table via DBeaver/mysql, don't assume Hibernate cleaned it up.
+- Any custom derived repository method starting with `deleteBy`/`removeBy` needs the calling service method annotated `@Transactional` — unlike `.save()`/`.findById()`, these don't get automatic transaction handling. Relevant for the still-unbuilt scheduled cleanup job (`deleteByExpiresAtBefore`) too — don't forget `@Transactional` there either.
+- A thrown-but-unhandled exception anywhere in the request path can surface as a confusing empty `403` instead of `500` — Spring forwards failures to `/error`, which itself sits behind the security filter chain and gets denied by `Http403ForbiddenEntryPoint` if the request is unauthenticated. If you ever see an empty 403 with no message on a route that should be public, suspect an unhandled exception upstream, not an auth/CORS misconfiguration first.

@@ -18,6 +18,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
@@ -47,6 +48,7 @@ public class AuthService {
         user.setAvatarUrl("https://cdn-icons-png.flaticon.com/512/149/149071.png"); //for now random url, we can set a default avatar URL later
         user.setPassword(passwordEncoder.encode(dto.getPassword()));
         user.setProvider(Provider.LOCAL);
+        user.setIsActive(true);
         userRepository.save(user);
 
         String token = jwtUtil.generateToken(user.getEmail());
@@ -119,11 +121,13 @@ public class AuthService {
         return refreshTokenRepository.save(refreshToken);
     }
 
+    @Transactional
     public void logoutUser(String refreshTokenValue) {
 
         refreshTokenRepository.deleteByToken(refreshTokenValue);
     }
 
+    @Transactional
     public void logoutFromAllDeviceOfUser(Authentication authentication) {
         User user = (User) authentication.getPrincipal();
         refreshTokenRepository.deleteByUser(user);

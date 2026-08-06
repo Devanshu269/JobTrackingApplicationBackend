@@ -30,6 +30,6 @@ public class RefreshToken {
     @Column(name = "device_info", nullable = false)
     private String deviceInfo;
 
-    @Column(name = "revoked", nullable = false)
+    @Column(name = "revoked", nullable = false, columnDefinition = "BOOL")
     private Boolean revoked = false;
 }
