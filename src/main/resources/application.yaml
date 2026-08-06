@@ -1,8 +1,11 @@
 spring:
+  config:
+    import: optional:file:./local-secrets.properties
+
   datasource:
     url: jdbc:mysql://localhost:3306/jobtracking?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
     username: root
-    password: Dnix@2699
+    password: ${DB_PASSWORD:placeholder}
     driver-class-name: com.mysql.cj.jdbc.Driver
 
   jpa:
@@ -41,10 +44,16 @@ spring:
 
 server:
   port: 8080
+  servlet:
+    context-path: /jobTracking
+
+cors:
+  allowed-origin: ${CORS_ALLOWED_ORIGIN:http://localhost:5173}
 
 jwt:
-  secret: ${JWT_SECRET:mySecretKeyForJobTrackerApplicationThatIsLongEnough}
-  expiration: 86400000
+  secret: ${JWT_SECRET:changeme}
+  expiration: 900000
+  refresh-expiration: 604800000
 
 cloudinary:
   cloud-name: ${CLOUDINARY_CLOUD_NAME:placeholder}

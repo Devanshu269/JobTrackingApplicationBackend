@@ -24,8 +24,11 @@ public class User {
     @Column(name = "user_id", nullable = false)
     private Integer userId;
 
-    @Column(name = "username", nullable = false)
-    private String username;
+    @Column(name = "first_name", nullable = false)
+    private String userFirstName;
+
+    @Column(name = "last_name", nullable = false)
+    private String userLastName;
 
     @Email
     @Column(unique = true, name = "email", nullable = false)
