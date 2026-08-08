@@ -1,5 +1,6 @@
 package com.jobtracker.dto;
 
+import com.jobtracker.enums.Provider;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -11,4 +12,5 @@ public class UserDto {
     private String userLastName;
     private String email;
     private String avatarUrl;
+    private Provider provider;
 }

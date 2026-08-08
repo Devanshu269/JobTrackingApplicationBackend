@@ -50,6 +50,13 @@ server:
 cors:
   allowed-origin: ${CORS_ALLOWED_ORIGIN:http://localhost:5173}
 
+app:
+  oauth2:
+    redirect-uri: ${OAUTH2_REDIRECT_URI:http://localhost:5173/oauth2/redirect}
+  password-reset:
+    redirect-uri: ${PASSWORD_RESET_REDIRECT_URI:http://localhost:5173/reset-password}
+    token-expiration-minutes: 30
+
 jwt:
   secret: ${JWT_SECRET:changeme}
   expiration: 900000
