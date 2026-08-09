@@ -9,11 +9,13 @@ import lombok.Setter;
 @Setter
 public class ChangePasswordRequestDto {
 
+    // Deliberately no @Size: this is an *existing* password being checked, not a new one being
+    // set. Accounts created under the old 4-character minimum would otherwise fail validation
+    // and be permanently unable to change their password.
     @NotBlank(message = "Current Password cannot be blank")
-    @Size(min = 4, max = 12, message = "Current Password must be between 4 and 12 characters")
     private String currentPassword;
 
     @NotBlank(message = "New Password cannot be blank")
-    @Size(min = 4, max = 12, message = "New Password must be between 4 and 12 characters")
+    @Size(min = 8, max = 64, message = "New Password must be between 8 and 64 characters")
     private String newPassword;
 }

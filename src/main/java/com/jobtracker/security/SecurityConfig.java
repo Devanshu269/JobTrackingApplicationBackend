@@ -35,6 +35,8 @@ public class SecurityConfig {
                         .requestMatchers("/api/auth/logout-all", "/api/auth/me", "/api/auth/change-password").authenticated()
                         .requestMatchers("/api/auth/**").permitAll()
                         .requestMatchers("/api/jobs/**").authenticated()
+                        .requestMatchers("/api/rounds/**").authenticated()
+                        .requestMatchers("/api/users/**").authenticated()
                         .requestMatchers("/oauth2/**", "/login/oauth2/**").permitAll()
                         .anyRequest().authenticated())
                 .build();

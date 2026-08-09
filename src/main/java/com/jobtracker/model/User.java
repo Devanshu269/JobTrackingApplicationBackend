@@ -40,6 +40,10 @@ public class User {
     @Column(name = "avatar_url")
     private String avatarUrl;
 
+    /** Resume reused as the default when creating a new job application. Nullable — a user may never set one. */
+    @Column(name = "default_resume_url")
+    private String defaultResumeUrl;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "provider", nullable = false)
     private Provider provider;

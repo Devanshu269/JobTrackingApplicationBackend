@@ -13,6 +13,6 @@ public class ResetPasswordRequestDto {
     private String token;
 
     @NotBlank(message = "New Password cannot be blank")
-    @Size(min = 4, max = 12, message = "New Password must be between 4 and 12 characters")
+    @Size(min = 8, max = 64, message = "New Password must be between 8 and 64 characters")
     private String newPassword;
 }

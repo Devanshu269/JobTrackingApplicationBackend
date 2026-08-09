@@ -1,7 +1,7 @@
 package com.jobtracker.enums;
 
 public enum Priority {
-    HiGH,
+    HIGH,
     MEDIUM,
     LOW
 }

@@ -12,5 +12,6 @@ public class UserDto {
     private String userLastName;
     private String email;
     private String avatarUrl;
+    private String defaultResumeUrl;
     private Provider provider;
 }

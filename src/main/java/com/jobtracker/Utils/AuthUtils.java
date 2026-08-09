@@ -27,6 +27,7 @@ public class AuthUtils {
         dto.setUserLastName(user.getUserLastName());
         dto.setEmail(user.getEmail());
         dto.setAvatarUrl(user.getAvatarUrl());
+        dto.setDefaultResumeUrl(user.getDefaultResumeUrl());
         dto.setProvider(user.getProvider());
         return dto;
     }

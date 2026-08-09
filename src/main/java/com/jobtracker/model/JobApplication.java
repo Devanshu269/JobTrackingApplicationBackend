@@ -1,5 +1,6 @@
 package com.jobtracker.model;
 
+import com.jobtracker.enums.JobType;
 import com.jobtracker.enums.Priority;
 import com.jobtracker.enums.Status;
 import jakarta.persistence.*;
@@ -10,6 +11,7 @@ import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 @EntityListeners(AuditingEntityListener.class)
 @Table(name = "job_applications")
@@ -42,6 +44,11 @@ public class JobApplication {
 
     @Column(name = "location")
     private String location;
+
+    /** Remote / hybrid / on-site. Nullable — pre-existing rows have no value and it's optional on create. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "job_type")
+    private JobType jobType;
 
     @Column(name = "salary_range")
     private String salaryRange;
@@ -85,4 +92,12 @@ public class JobApplication {
     @LastModifiedDate
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
+
+    // Cascade so deleting a job also removes its rounds/AI results — without this the child
+    // rows' FK to job_id blocks the delete (mirrors User -> jobApplications).
+    @OneToMany(mappedBy = "jobApplication", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<InterviewRound> interviewRounds;
+
+    @OneToMany(mappedBy = "jobApplication", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<JobAiResult> aiResults;
 }

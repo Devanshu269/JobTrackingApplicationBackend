@@ -1,8 +1,14 @@
-# Auth Feature Checklist
+# Backend Feature Checklist
 
-Mark items `[x]` as you complete them (manual, not auto-synced). Scope: local signup/login, Google + GitHub OAuth2, JWT access tokens + DB-backed refresh tokens, profile lookup, change password, forgot/reset password. Base path `/jobTracking/api/auth`.
+Mark items `[x]` as you complete them (manual, not auto-synced).
+
+Scope has outgrown the original auth-only intent — it now covers local signup/login, Google + GitHub OAuth2, JWT + refresh tokens, password management, **and** the job-tracking domain (job applications, interview rounds, profile). Filename still says `AUTH_FEATURE_CHECKLIST.md`; rename it if that bothers you.
+
+All paths below are relative to the `/jobTracking` context path. The frontend-facing version of this contract (request/response bodies, enum strings, filter params) lives in `JobTrackingApplicationFrontend/BACKEND_INTEGRATION.md` — keep the two in sync.
 
 ## Endpoints — full list
+
+### Auth (`/api/auth`)
 - [x] `POST /signup` — local signup, public
 - [x] `POST /login` — local login, public
 - [x] `GET /oauth2/authorization/google` — kicks off Google login (Spring Security built-in route, not a controller method)
@@ -18,18 +24,70 @@ Mark items `[x]` as you complete them (manual, not auto-synced). Scope: local si
 - [x] `POST /logout` — deletes one refresh token row, public
 - [x] `POST /logout-all` — deletes all refresh token rows for current user, **requires auth**
 
+### Profile (`/api/users`) — all **require auth**
+- [x] `PUT /me` — partial profile update (firstName/lastName/avatarUrl)
+- [x] `PUT /me/default-resume` — set the reusable default resume URL
+- [x] `DELETE /me/default-resume` — clear it (needs its own verb because the DTO is `@NotBlank`)
+
+### Job applications (`/api/jobs`) — all **require auth**, all scoped to the caller
+- [x] `GET /` — list, newest first, optional `?status=` `?priority=` `?jobType=` `?search=` filters
+- [x] `GET /stats` — dashboard counts `{ total, byStatus }`, every Status key zero-filled
+- [x] `GET /{jobId}` — one job
+- [x] `POST /` — create, 201
+- [x] `PUT /{jobId}` — full replace (not a patch)
+- [x] `DELETE /{jobId}` — 204, cascades to rounds + AI results
+
+### Cross-job rounds (`/api/rounds`) — **requires auth**
+- [x] `GET /upcoming` — every scheduled round across all the caller's jobs, soonest first, with company/role flattened in
+
+### Interview rounds (`/api/jobs/{jobId}/rounds`) — all **require auth**, ownership via parent job
+- [x] `GET /` — list, ordered by roundNumber asc
+- [x] `GET /{roundId}` — one round
+- [x] `POST /` — create, 201
+- [x] `PUT /{roundId}` — full replace
+- [x] `DELETE /{roundId}` — 204
+
 ## DTOs — code-complete
-- [x] SignupRequestDto — userFirstName, userLastName, email, password
+
+### Auth
+- [x] SignupRequestDto — userFirstName, userLastName (3–20 each), email, password (8–64)
 - [x] LoginRequestDto — email, password
-- [x] ChangePasswordRequestDto — currentPassword, newPassword (both 4-12 chars) — now wired to `POST /change-password`
+- [x] ChangePasswordRequestDto — currentPassword (**no `@Size`** — it's an existing password being verified, and anyone created under the old 4–12 rule would otherwise be locked out of changing it), newPassword (8–64)
 - [x] ForgotPasswordRequestDto — email
-- [x] ResetPasswordRequestDto — token, newPassword (4-12 chars)
+- [x] ResetPasswordRequestDto — token, newPassword (8–64)
 - [x] OAuthExchangeRequestDto — code (for `POST /oauth/exchange`)
 - [x] RefreshTokenRequestDto — refreshToken (for `POST /refresh` and `/logout`)
 - [x] AuthResponseDto — `token` + `refreshToken` + `userId` (no tokenType, no embedded profile — frontend calls `/me` separately for that)
 - [x] UserDto — userId, userFirstName, userLastName, email, avatarUrl, **provider** (added so frontend can gate "change password" UI to LOCAL-only accounts) — backs `GET /me`
 - [x] ErrorResponseDto — timestamp, status, message, errors map
-- [ ] UpdateProfileRequestDto, UpdateDefaultResumeRequestDto — exist, not yet wired to any endpoint (out of auth scope, belongs to profile/job features)
+
+### Job domain
+- [x] UpdateProfileRequestDto — firstName/lastName/avatarUrl, all optional (no `@NotBlank`) — now wired to `PUT /api/users/me` as a genuine partial update
+- [x] JobApplicationRequestDto — used by both POST and PUT. Required: companyName, jobRole, status. Optional: priority, **jobType**, jobUrl, location, salaryRange, recruiter{Name,Email,Phone}, resumeUrl, coverLetterUrl, notes, appliedDate, followUpDate, reminderEnabled
+- [x] JobApplicationResponseDto — the request fields plus jobId, createdAt, updatedAt. **Deliberately never returns the entity** — serializing `JobApplication` directly would drag in `user`, which recurses back into `jobApplications` and exposes the password hash
+- [x] InterviewRoundRequestDto — required roundNumber (min 1) + roundType; optional roundDate, interviewerName, notes, feedback, outcome
+- [x] InterviewRoundResponseDto — plus jobRoundId, jobId, createdAt
+- [x] UpcomingRoundResponseDto — round fields plus the parent job's `jobId`/`companyName`/`jobRole`. Separate from InterviewRoundResponseDto because this is read across *all* jobs at once, so the job context has to travel with each row
+- [x] JobStatsResponseDto — total + `Map<Status, Long>`, zero-filled for every Status so the frontend never null-checks a bucket
+- [x] UpdateDefaultResumeRequestDto — `resumeUrl`, `@NotBlank`. Now wired to `PUT /api/users/me/default-resume` after adding the missing `User.defaultResumeUrl` field it depended on
+
+## Password policy — resolved 2026-08-09
+- [x] Raised from `@Size(min = 4, max = 12)` to **`min = 8, max = 64`** on SignupRequestDto, ChangePasswordRequestDto and ResetPasswordRequestDto. The old 12-char ceiling blocked passphrases and password managers for no security benefit — the stored value is a fixed-length bcrypt hash, so a longer max costs nothing in the schema
+- [x] `currentPassword` deliberately left with no `@Size` (see the DTO note above)
+- [ ] Frontend `src/lib/validation.js` still has no upper bound, so a 65+ char password passes client validation then 400s. Frontend-side fix
+
+## JobType — code-complete, runtime-tested
+- [x] New `JobType` enum (`REMOTE`/`HYBRID`/`ONSITE`) + nullable `job_type` column on `JobApplication`. Added because the frontend already renders remote/hybrid/on-site in `JobTable` and `KanbanBoard` but no backend field existed — the alternative was inferring it from the free-text `location`, which is fragile (`"Remote (Canada)"` vs `"Austin, TX"`)
+- [x] Wired through JobApplicationRequestDto, JobApplicationResponseDto, JobUtils (both directions), and added as a `?jobType=` list filter alongside status/priority
+- [x] UPPERCASE to match Status/Priority/Outcome (RoundType's PascalCase remains the odd one out)
+- [x] Runtime-tested: all three values persist and round-trip, filter works alone and combined with `status`, PUT changes it, omitting it stores null
+
+## Upcoming rounds — code-complete, runtime-tested
+- [x] `GET /api/rounds/upcoming` in a new `RoundController`. **Why a separate controller:** `InterviewRoundController` is mapped under `/api/jobs/{jobId}/rounds` and always has a parent job to scope by; this query deliberately spans every job the caller owns, so there's no `jobId` to supply
+- [x] `findUpcomingByUser` uses a `JOIN FETCH` on the parent job so mapping company/role doesn't fire a lazy select per row — the whole point of the endpoint was to avoid the frontend doing one request per job
+- [x] **Ownership lives in the WHERE clause** (`j.user.userId = :userId`) rather than a `findOwnedJob` call — this is the one round query with no parent job to hang the check off
+- [x] `roundDate >= :from` naturally excludes both past rounds and unscheduled (null-date) ones
+- [x] Runtime-tested: correct ordering across two jobs created out of order, past round excluded, null-date round excluded, cross-user isolation verified with a second account, empty case returns `[]` not 404, 401 without a token
 
 ## JwtUtil — done
 - [x] @Value-injected secret + expiration (access: 15 min via jwt.expiration)
@@ -94,10 +152,40 @@ Mark items `[x]` as you complete them (manual, not auto-synced). Scope: local si
 ## AuthController — code-complete, runtime-tested
 - [x] All endpoints listed at top of this file are wired to `AuthService`, no business logic in the controller layer itself
 
+## Job applications — code-complete, runtime-tested
+- [x] `JobApplicationService` — list/get/create/update/delete/stats, plus the shared `findOwnedJob(user, jobId)` helper
+- [x] **Ownership model (the important bit):** every read and write path funnels through `findOwnedJob`, which queries `findByJobIdAndUser_UserId(jobId, userId)` — the two conditions together, never "fetch by id then check owner". Misses throw `ResourceNotFoundException` → **404, never 403**, because a 403 would confirm the id exists
+- [x] List filtering via `JpaSpecificationExecutor` — optional `status`, `priority`, and `search` (case-insensitive `LIKE` on companyName OR jobRole). The user-id predicate is added unconditionally, before any optional filter, so no combination of query params can widen the result set beyond the caller's own rows
+- [x] Sorted newest-first (`createdAt DESC`)
+- [x] `GET /api/jobs/stats` — one grouped `COUNT` query via an interface projection (`StatusCount`), then zero-filled across `Status.values()` in an `EnumMap`
+- [x] `JobUtils` (`Utils/`) — shared `applyToEntity` used by BOTH create and update so the two can't drift when a field is added; plus entity→ResponseDto mapping
+- [x] `reminderEnabled` defaulted to `false` in the mapper — the column is `NOT NULL` and the field is optional in the request, so a null would blow up the insert
+- [x] Added `@OneToMany(cascade = ALL, orphanRemoval = true)` from `JobApplication` to `interviewRounds` and `aiResults`. **Why:** without it, deleting a job that has rounds fails on the child FK — mirrors the existing `User -> jobApplications` cascade
+- [x] Runtime-tested: create/list/get/update/delete, all three filters, combined filters, stats zero-fill, 400 validation, 404 on unknown id, 401 without token, cascade delete (job with 2 rounds → both gone)
+
+## Interview rounds — code-complete, runtime-tested
+- [x] `InterviewRoundService` — nested under a job at `/api/jobs/{jobId}/rounds`
+- [x] Ownership reuses `JobApplicationService.findOwnedJob` first, so a round under someone else's job 404s before any round row is read; the round lookup itself is then also scoped by `jobId`, so a round id can't be reached through a job you happen to own
+- [x] Runtime-tested: create/list (ordered by roundNumber)/update/delete, `roundNumber` min-1 validation, and cross-user 404 on both list and create
+
+## Profile — code-complete, runtime-tested
+- [x] `UserService.updateProfile` — genuine partial update: each field only applied when non-null, so the frontend can send just the one thing that changed
+- [x] Returns the same `UserDto` shape as `GET /api/auth/me`, so the frontend can reuse one response handler
+- [x] Runtime-tested: sending only `firstName` updated it and left `lastName`/`avatarUrl` untouched
+- [x] Added `User.defaultResumeUrl` (nullable) — the field `UpdateDefaultResumeRequestDto` had always assumed existed but which was never actually on the entity. Exposed on `UserDto` so the frontend can prefill a new job application's `resumeUrl`
+- [x] `PUT /me/default-resume` to set it, `DELETE /me/default-resume` to clear. **Why two endpoints:** the DTO's `resumeUrl` is `@NotBlank`, so there's no way to express "remove it" through the PUT without weakening validation — removal gets its own verb rather than accepting empty strings. The DELETE returns the updated `UserDto` rather than 204, so the client can refresh local state from the response
+- [x] Runtime-tested: null before set → persists after PUT → visible on `/me` → blank value 400s → DELETE nulls it → 401 without a token
+- [x] Confirmed `ddl-auto: update` DID add the brand-new `default_resume_url` column on restart — consistent with the gotcha that it reliably *adds* but not *alters*
+
+## Cross-user isolation — explicitly tested with a second account
+- [x] Created a separate "attacker" user and confirmed against the victim's job: list returns `[]`, GET/PUT/DELETE all 404, `/stats` reads all-zero, and the victim's row was verified intact afterward
+- [x] Same for rounds: listing and creating under the victim's job both 404
+
 ## Security — code-complete, runtime-tested
 - [x] SecurityConfig: CSRF off, sessions STATELESS
 - [x] `/api/auth/**` public EXCEPT `logout-all`, `me`, `change-password` explicitly carved out to require auth (see the `/me` note above — this list needs a new entry every time an authenticated endpoint is added under `/api/auth`)
 - [x] `/oauth2/**`, `/login/oauth2/**` explicitly `permitAll()`
+- [x] `/api/jobs/**` and `/api/users/**` both `.authenticated()`
 - [x] Custom `authenticationEntryPoint` returns a clean `401` for unauthenticated requests to protected endpoints. **Why it was needed:** with `oauth2Login()` configured, Spring Security's default behavior redirects unauthenticated requests to `/login` (302) instead of 401 — fine for a traditional server-rendered login page, wrong for a JSON API where a frontend `fetch()` call would instead get redirected into trying to parse an HTML login page as JSON
 - [x] CORSConfig.java — origin from CORS_ALLOWED_ORIGIN env var (not hardcoded)
 - [x] JwtAuthenticationFilter — reads `Authorization: Bearer <token>`, validates via JwtUtil, sets the **User entity itself** as the Authentication principal, always calls `filterChain.doFilter(...)` regardless (doesn't block unauthenticated OAuth2/public requests)
@@ -111,13 +199,35 @@ Mark items `[x]` as you complete them (manual, not auto-synced). Scope: local si
   - [x] InvalidRefreshTokenException → 401
   - [x] InvalidExchangeCodeException → 401
   - [x] InvalidResetTokenException → 401
+  - [x] ResourceNotFoundException → 404 (used by every job/round ownership miss)
   - [x] MethodArgumentNotValidException → 400 with per-field messages
+  - [x] HttpMessageNotReadableException → 400 (bad enum string or malformed JSON in a body)
+  - [x] MethodArgumentTypeMismatchException → 400 (bad enum/type in a query param or path variable)
+- [x] **Fixed a bodyless-401 bug on bad input.** An invalid enum (`"status": "applied"`, `?jobType=BOGUS`) or a non-numeric path variable (`/api/jobs/abc`) used to escape to Spring's `/error` page, which sits behind the security filter chain, and came back as an empty **401** — the same `/error`-forwarding trap that produced misleading 403s earlier, just wearing a different status code now that a custom `authenticationEntryPoint` exists. Actively harmful because the frontend's axios interceptor treats 401 as "token expired" and fires a refresh, so a typo'd enum would trigger a spurious refresh. Both handlers now return a 400 naming the field and listing the accepted enum values
+
+## Deferred to the Administration board (decided 2026-08-09)
+
+These are the remaining gaps in User read/update coverage. Deliberately parked — none of them block the frontend, and each is entangled with the admin/roles system that doesn't exist yet.
+
+- [ ] **Change email** — no endpoint today. Three things make this more than a simple `PUT`:
+  1. **OAuth landmine:** `handleOAuth2Login` finds existing users *by email*. If a `GOOGLE` user changes their stored email, their next Google login matches nothing and **silently creates a second account**, orphaning the original and all its job applications. Email change must be blocked for non-`LOCAL` providers, exactly like change-password already is.
+  2. Uniqueness check → 409, reusing `EmailAlreadyExistsException`.
+  3. Ideally a verification email to the *new* address before committing the change (reuse the `PasswordResetToken` pattern — random token, short TTL, single-use).
+- [ ] **`isActive` is half-built** — `login()` and `refreshAccessToken()` both already check it and reject deactivated users, but **nothing can set it to false** except a manual DB edit. Decide what it's for before building: self-service "deactivate my account", or an admin moderation tool? If self-service, note reactivation can't go through login (a deactivated user is rejected before ever getting a token), so it needs either a time-window auto-reactivate or an admin action. Also not currently exposed on `UserDto`.
+- [ ] **Delete account** — no endpoint, and it would fail today: `User` cascades only to `jobApplications`, but `refresh_tokens` and `password_reset_tokens` also hold FKs to `users` with no JPA cascade and no DB-level `ON DELETE CASCADE`, so `userRepository.delete(user)` hits `ERROR 1451`. Confirmed by hitting exactly that when cleaning up test users via raw SQL. Fix by adding `@OneToMany(cascade = ALL, orphanRemoval = true)` for both collections on `User` first.
+- [ ] **Roles/admin-moderator system** — no `UserDetailsService` or role column yet. Previously noted as a clean seam; it's now the prerequisite for the three items above.
+- [ ] `createdAt` not exposed on `UserDto` — trivial to add if a profile page wants "Member since March 2026".
 
 ## Not done yet
 - [ ] Scheduled cleanup job for expired `refresh_tokens` AND `password_reset_tokens` rows (`@Scheduled` + `@EnableScheduling`) — `deleteByExpiresAtBefore` exists on RefreshTokenRepository but is unused; no equivalent exists yet on PasswordResetTokenRepository
 - [ ] Refresh token rotation — expiresAt fixed at creation, never extended; an actively-used session still force-logs-out exactly 7 days after login
-- [ ] Roles/admin-moderator system — no UserDetailsService or role column yet
 - [ ] Rate limiting on `/forgot-password` (currently nothing stops someone spamming reset emails at a victim's inbox)
+- [ ] Pagination on `GET /api/jobs` — currently returns every matching row. Fine at current scale, will need `Pageable` once a user has hundreds of applications
+- [ ] `PUT` endpoints are full-replace, not `PATCH` — omitting a field nulls it. Fine if the frontend always sends the whole object back (typical for an edit form), but a real `PATCH` would be friendlier for one-field updates like a drag-and-drop status change on a kanban board
+- [ ] AI features — `job_ai_results` table and entity exist, no endpoints and no Gemini integration (`GEMINI_API_KEY` still a placeholder)
+- [ ] File upload — Cloudinary not integrated (`CLOUDINARY_*` still placeholders). `resumeUrl`/`coverLetterUrl` are plain strings the client sets itself
+- [ ] `JobApplicationRepository.findByUser_UserIdAndJobId` — old method returning `List` where at most one row can match (jobId is the PK). Superseded by `findByJobIdAndUser_UserId` returning `Optional`; the old one is now unused and can be deleted
+- [ ] Client-side password max — backend now allows up to 64 chars but `src/lib/validation.js` has no upper bound, so a 65+ char passphrase still 400s. Small gap, frontend-side fix
 
 ## Known housekeeping (low priority)
 - [ ] Rotate local MySQL root password (old value is in earlier git history; local dev DB only, not internet-exposed)
@@ -134,3 +244,8 @@ Mark items `[x]` as you complete them (manual, not auto-synced). Scope: local si
 - With `oauth2Login()` configured, unauthenticated requests to protected endpoints get redirected to `/login` (302) by default instead of returning 401 — needed a custom `exceptionHandling().authenticationEntryPoint(...)` in `SecurityConfig` to get clean JSON-API-appropriate 401s.
 - GitHub's `/user` endpoint often has `email: null` (private by default) — Spring Security's default `DefaultOAuth2UserService` does NOT automatically fall back to `/user/emails`; needed a custom `OAuth2UserService` to handle it.
 - A Gmail **App Password** (myaccount.google.com/apppasswords) is a separate SMTP-only credential from the actual Google account password — generating one doesn't touch real login security, and it's unrelated to anything about GitHub.
+- **JPA cascade is application-level, not database-level.** `@OneToMany(cascade = ALL)` makes `repository.delete(parent)` clean up children, but the actual MySQL FKs have no `ON DELETE CASCADE` — so a raw SQL `DELETE FROM users ...` in DBeaver/CLI still fails with `ERROR 1451` and you must delete children in FK order by hand. Also means a cascade only covers collections the entity actually declares (see the delete-my-account gap above).
+- `ddl-auto: update` also never updates an existing **MySQL ENUM column's** allowed-value list when the Java enum changes. Renaming/adding an enum constant needs a manual `ALTER TABLE ... MODIFY COLUMN x ENUM(...)`. Hit this fixing the `Priority.HiGH` → `HIGH` typo on 2026-08-09 (table was empty, so no data migration was needed — would have been much worse later).
+- Enum constant names are part of the public API — they're the literal strings sent over JSON. `RoundType` is PascalCase (`Technical`, `SystemDesign`) while `Status`/`Priority`/`Outcome` are UPPERCASE; easy to get wrong from the frontend.
+- Never return JPA entities from a controller. Returning `JobApplication` directly serializes its `user`, which recurses back into `user.jobApplications` and also exposes the password hash. Every endpoint maps to a `*ResponseDto` instead.
+- Ownership checks must be part of the **query**, not a post-fetch `if`. `findByJobIdAndUser_UserId(jobId, userId)` makes "not yours" and "doesn't exist" the same code path, which is what lets every miss return an indistinguishable 404.
