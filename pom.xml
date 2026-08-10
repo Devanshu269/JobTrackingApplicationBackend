@@ -61,6 +61,23 @@
 			<scope>runtime</scope>
 		</dependency>
 
+		<!-- Flyway: versioned schema migrations. Replaces ddl-auto for schema changes,
+		     which repeatedly failed silently on a populated table (see V2 for the details).
+
+		     Must be the STARTER, not bare flyway-core. Spring Boot 4 splits autoconfiguration
+		     into per-technology modules (spring-boot-jackson, spring-boot-security, …), so
+		     flyway-core alone puts the library on the classpath without anything that runs it —
+		     migrations are silently never applied and the app boots as if Flyway weren't there. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-flyway</artifactId>
+		</dependency>
+		<!-- MySQL-specific support is a separate module and not pulled in by the starter. -->
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-mysql</artifactId>
+		</dependency>
+
 		<!-- Lombok -->
 		<dependency>
 			<groupId>org.projectlombok</groupId>

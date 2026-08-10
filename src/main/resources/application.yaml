@@ -8,9 +8,20 @@ spring:
     password: ${DB_PASSWORD:placeholder}
     driver-class-name: com.mysql.cj.jdbc.Driver
 
+  flyway:
+    enabled: true
+    # The database already exists and was built by ddl-auto, so there is no migration history.
+    # baseline-on-migrate stamps it as V1 (without running V1) and then applies V2 onward.
+    # A brand-new database instead runs V1 from scratch.
+    baseline-on-migrate: true
+    baseline-version: 1
+
   jpa:
     hibernate:
-      ddl-auto: update
+      # Flyway owns the schema now. `validate` makes Hibernate verify the entities match what
+      # the migrations produced and fail fast if they don't — instead of silently "fixing" it,
+      # which is what produced the drift this replaces.
+      ddl-auto: validate
     show-sql: true
     properties:
       hibernate:
@@ -83,7 +94,14 @@ app:
 jwt:
   secret: ${JWT_SECRET:changeme}
   expiration: 900000
+  # Sliding window: each rotation issues a fresh 7 days.
   refresh-expiration: 604800000
+  # Absolute ceiling from the ORIGINAL login (30 days), so sliding expiry can't
+  # produce an immortal session. Reaching it revokes the family and forces re-login.
+  refresh-absolute-expiration: 2592000000
+  # A token replayed within this many seconds of being rotated is treated as two
+  # tabs racing, not theft — it fails that call without revoking the session.
+  refresh-rotation-grace-seconds: 30
 
 cloudinary:
   cloud-name: ${CLOUDINARY_CLOUD_NAME:placeholder}

@@ -32,4 +32,29 @@ public class RefreshToken {
 
     @Column(name = "revoked", nullable = false, columnDefinition = "BOOL")
     private Boolean revoked = false;
+
+    /**
+     * Groups every token in one rotation chain — i.e. one login session. Carried forward on each
+     * rotation so that detecting a replayed token can kill the whole session, not just that row.
+     */
+    @Column(name = "family_id", nullable = false, length = 64)
+    private String familyId;
+
+    /**
+     * When the *original* login happened, copied unchanged through every rotation. Backs the
+     * absolute session cap: sliding expiry alone would let a continuously-used session live
+     * forever.
+     */
+    @Column(name = "family_created_at", nullable = false)
+    private LocalDateTime familyCreatedAt;
+
+    /**
+     * When this token was consumed by a rotation. Null while current.
+     *
+     * <p>Also drives the race grace period: a token replayed within seconds of being rotated is
+     * far more likely to be two browser tabs refreshing at once than an attacker, so it fails
+     * that one call without nuking the session.
+     */
+    @Column(name = "rotated_at")
+    private LocalDateTime rotatedAt;
 }

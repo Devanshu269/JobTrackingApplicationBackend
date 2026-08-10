@@ -22,6 +22,8 @@ import com.jobtracker.repository.UserRepository;
 import com.jobtracker.security.JwtUtil;
 import com.jobtracker.security.OAuthExchangeCodeStore;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.core.Authentication;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -45,8 +47,22 @@ public class AuthService {
     private final PasswordResetTokenRepository passwordResetTokenRepository;
     private final EmailService emailService;
 
+    private static final Logger log = LoggerFactory.getLogger(AuthService.class);
+
     @Value("${jwt.refresh-expiration}")
     private long refreshExpiration;
+
+    /**
+     * Hard ceiling on a session's total life, measured from the original login regardless of how
+     * many rotations have happened since. Without it, sliding expiry means a session that's used
+     * weekly never ends.
+     */
+    @Value("${jwt.refresh-absolute-expiration}")
+    private long refreshAbsoluteExpiration;
+
+    /** Window in which a replayed token is treated as a benign race rather than a theft. */
+    @Value("${jwt.refresh-rotation-grace-seconds:30}")
+    private long rotationGraceSeconds;
 
     @Value("${app.password-reset.redirect-uri}")
     private String passwordResetRedirectUri;
@@ -212,33 +228,112 @@ public class AuthService {
                 .orElseThrow(InvalidExchangeCodeException::new);
     }
 
+    /**
+     * Rotating refresh: the presented token is consumed and a replacement issued.
+     *
+     * <p>Two things this buys over the previous non-rotating version:
+     * <ul>
+     *   <li><b>A stolen token has a short useful life</b> — whoever refreshes first invalidates
+     *       it for the other party, and the loser's replay trips reuse detection.</li>
+     *   <li><b>An active session no longer dies at exactly 7 days</b>, because each rotation
+     *       issues a fresh 7-day window — bounded by the absolute cap below.</li>
+     * </ul>
+     */
+    /**
+     * {@code noRollbackFor} is essential, not cosmetic. Both the reuse-detection and
+     * absolute-cap paths revoke the token family and then throw — and an unchecked exception
+     * would normally roll the transaction back, silently undoing the revocation that had just
+     * been performed. Confirmed by test: without this, a replayed token was rejected but its
+     * family stayed alive, so the security control was a no-op.
+     *
+     * <p>Safe to apply method-wide because every other throw site does no writes beforehand.
+     */
+    @Transactional(noRollbackFor = InvalidRefreshTokenException.class)
     public AuthResponseDto refreshAccessToken(String refreshTokenValue) {
         RefreshToken refreshToken = refreshTokenRepository.findByToken(refreshTokenValue)
                 .orElseThrow(InvalidRefreshTokenException::new);
 
-        if (Boolean.TRUE.equals(refreshToken.getRevoked()) || refreshToken.getExpiresAt().isBefore(LocalDateTime.now())) {
+        LocalDateTime now = LocalDateTime.now();
+
+        if (Boolean.TRUE.equals(refreshToken.getRevoked())) {
+            handleReplayedToken(refreshToken, now);
+        }
+        if (refreshToken.getExpiresAt().isBefore(now)) {
             throw new InvalidRefreshTokenException();
+        }
+        // Sliding expiry must not mean an immortal session: the chain can't outlive this window
+        // measured from the ORIGINAL login, however many times it has been rotated since.
+        if (refreshToken.getFamilyCreatedAt().plusSeconds(refreshAbsoluteExpiration / 1000).isBefore(now)) {
+            refreshTokenRepository.revokeFamily(refreshToken.getFamilyId());
+            throw new InvalidRefreshTokenException("Session expired. Please log in again.");
         }
 
         User user = refreshToken.getUser();
         if (user.getIsActive() == null || !user.getIsActive()) {
             throw new InvalidRefreshTokenException("User account has been De-Activated. Please contact support for assistance.");
         }
-        String newAccessToken = jwtUtil.generateToken(user.getEmail());
+
+        // Consume the presented token, then issue its successor in the same family.
+        refreshToken.setRevoked(true);
+        refreshToken.setRotatedAt(now);
+        refreshTokenRepository.save(refreshToken);
+
+        RefreshToken rotated = new RefreshToken();
+        rotated.setToken(UUID.randomUUID().toString());
+        rotated.setUser(user);
+        rotated.setExpiresAt(now.plusSeconds(refreshExpiration / 1000));
+        rotated.setDeviceInfo(refreshToken.getDeviceInfo());
+        rotated.setRevoked(false);
+        rotated.setFamilyId(refreshToken.getFamilyId());
+        rotated.setFamilyCreatedAt(refreshToken.getFamilyCreatedAt());
+        refreshTokenRepository.save(rotated);
 
         AuthResponseDto responseDto = new AuthResponseDto();
-        responseDto.setToken(newAccessToken);
+        responseDto.setToken(jwtUtil.generateToken(user.getEmail()));
+        // NOTE: unlike the previous implementation this is NOT null. The client must store it —
+        // the token it sent is now dead.
+        responseDto.setRefreshToken(rotated.getToken());
         responseDto.setUserId(user.getUserId());
         return responseDto;
     }
 
+    /**
+     * An already-consumed token came back. Either two clients raced, or one copy was stolen —
+     * and from here the two are indistinguishable.
+     *
+     * <p>Within a short grace window it is treated as a race (two tabs refreshing at the same
+     * instant) and only that call fails. Beyond it, the conservative reading wins: the chain is
+     * assumed compromised and the whole session is revoked, forcing a fresh login on every
+     * device using it.
+     */
+    private void handleReplayedToken(RefreshToken refreshToken, LocalDateTime now) {
+        LocalDateTime rotatedAt = refreshToken.getRotatedAt();
+        boolean withinGrace = rotatedAt != null
+                && rotatedAt.plusSeconds(rotationGraceSeconds).isAfter(now);
+
+        if (!withinGrace) {
+            int revoked = refreshTokenRepository.revokeFamily(refreshToken.getFamilyId());
+            log.warn("Refresh token reuse detected for user {} — revoked {} token(s) in family {}",
+                    refreshToken.getUser().getUserId(), revoked, refreshToken.getFamilyId());
+        }
+        throw new InvalidRefreshTokenException();
+    }
+
+    /**
+     * Starts a <b>new</b> session family — used by signup, login and OAuth. Rotation of an
+     * existing session happens inside {@link #refreshAccessToken}, which carries the family
+     * forward instead of minting a new one.
+     */
     public RefreshToken createRefreshToken(User user, String deviceInfo) {
+        LocalDateTime now = LocalDateTime.now();
         RefreshToken refreshToken = new RefreshToken();
         refreshToken.setToken(UUID.randomUUID().toString());
         refreshToken.setUser(user);
-        refreshToken.setExpiresAt(LocalDateTime.now().plusSeconds(refreshExpiration / 1000));
+        refreshToken.setExpiresAt(now.plusSeconds(refreshExpiration / 1000));
         refreshToken.setDeviceInfo(deviceInfo != null ? deviceInfo : "Unknown device");
         refreshToken.setRevoked(false);
+        refreshToken.setFamilyId(UUID.randomUUID().toString());
+        refreshToken.setFamilyCreatedAt(now);
         return refreshTokenRepository.save(refreshToken);
     }
 
