@@ -32,7 +32,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             if (jwtUtil.validateToken(token)) {
                     String email = jwtUtil.extractEmail(token);
                     Optional<User> userOptional = userRepository.findByEmail(email);
-                    if (userOptional.isPresent()) {
+                    // isActive is re-checked on every request, not just at login/refresh. A token
+                    // issued before deactivation stays cryptographically valid for its full 15
+                    // minutes, so without this a deactivated account keeps working until the token
+                    // expires — and "deactivate this user" would not actually take effect.
+                    if (userOptional.isPresent() && Boolean.TRUE.equals(userOptional.get().getIsActive())) {
                         User user = userOptional.get();
                         UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(user, null, Collections.emptyList());
                         SecurityContextHolder.getContext().setAuthentication(authToken);

@@ -16,7 +16,8 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api/activity")
 @RequiredArgsConstructor
-public class ActivityController {
+public class
+ActivityController {
 
     private final ActivityService activityService;
 

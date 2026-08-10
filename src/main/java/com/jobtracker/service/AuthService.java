@@ -157,6 +157,7 @@ public class AuthService {
         return responseDto;
     }
 
+    @Transactional
     public void changePassword(Authentication authentication, ChangePasswordRequestDto dto) {
         User user = (User) authentication.getPrincipal();
 
@@ -170,6 +171,12 @@ public class AuthService {
 
         user.setPassword(passwordEncoder.encode(dto.getNewPassword()));
         userRepository.save(user);
+
+        // Same reasoning as resetPassword, which has always done this: a password change is
+        // very often a response to suspected compromise, and leaving existing refresh tokens
+        // alive would let an attacker's session keep rotating itself for another 7 days.
+        // The caller's own session dies too — the client must re-authenticate after this.
+        refreshTokenRepository.deleteByUser(user);
     }
 
     public void forgotPassword(String email) {
