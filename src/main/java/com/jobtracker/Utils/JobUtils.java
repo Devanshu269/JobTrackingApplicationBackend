@@ -2,6 +2,7 @@ package com.jobtracker.Utils;
 
 import com.jobtracker.dto.InterviewRoundRequestDto;
 import com.jobtracker.dto.InterviewRoundResponseDto;
+import com.jobtracker.dto.JobApplicationPatchDto;
 import com.jobtracker.dto.JobApplicationRequestDto;
 import com.jobtracker.dto.JobApplicationResponseDto;
 import com.jobtracker.dto.UpcomingRoundResponseDto;
@@ -41,6 +42,36 @@ public class JobUtils {
         job.setFollowUpDate(dto.getFollowUpDate());
         // reminderEnabled is NOT NULL in the DB; default it rather than letting a null through
         job.setReminderEnabled(dto.getReminderEnabled() != null ? dto.getReminderEnabled() : Boolean.FALSE);
+    }
+
+    /**
+     * Applies only the fields actually supplied. Null is treated as "not supplied" — see the
+     * DTO's javadoc for why null cannot mean "clear" without JsonNullable or a raw Map.
+     *
+     * <p>Note {@code followUpDate} re-arms the reminder here exactly as it does on a full update:
+     * moving the date must clear {@code reminderSentAt} or the rescheduled follow-up never fires.
+     */
+    public void applyPatchToEntity(JobApplicationPatchDto dto, JobApplication job) {
+        if (dto.getCompanyName() != null) job.setCompanyName(dto.getCompanyName());
+        if (dto.getJobRole() != null) job.setJobRole(dto.getJobRole());
+        if (dto.getStatus() != null) job.setStatus(dto.getStatus());
+        if (dto.getPriority() != null) job.setPriority(dto.getPriority());
+        if (dto.getJobType() != null) job.setJobType(dto.getJobType());
+        if (dto.getJobUrl() != null) job.setJobUrl(dto.getJobUrl());
+        if (dto.getLocation() != null) job.setLocation(dto.getLocation());
+        if (dto.getSalaryRange() != null) job.setSalaryRange(dto.getSalaryRange());
+        if (dto.getRecruiterName() != null) job.setRecruiterName(dto.getRecruiterName());
+        if (dto.getRecruiterEmail() != null) job.setRecruiterEmail(dto.getRecruiterEmail());
+        if (dto.getRecruiterPhone() != null) job.setRecruiterPhone(dto.getRecruiterPhone());
+        if (dto.getResumeUrl() != null) job.setResumeUrl(dto.getResumeUrl());
+        if (dto.getCoverLetterUrl() != null) job.setCoverLetterUrl(dto.getCoverLetterUrl());
+        if (dto.getNotes() != null) job.setNotes(dto.getNotes());
+        if (dto.getAppliedDate() != null) job.setAppliedDate(dto.getAppliedDate());
+        if (dto.getFollowUpDate() != null && !java.util.Objects.equals(job.getFollowUpDate(), dto.getFollowUpDate())) {
+            job.setReminderSentAt(null);
+            job.setFollowUpDate(dto.getFollowUpDate());
+        }
+        if (dto.getReminderEnabled() != null) job.setReminderEnabled(dto.getReminderEnabled());
     }
 
     public JobApplicationResponseDto toJobResponseDto(JobApplication job) {

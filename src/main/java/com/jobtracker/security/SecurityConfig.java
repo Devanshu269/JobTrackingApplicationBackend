@@ -37,6 +37,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/jobs/**").authenticated()
                         .requestMatchers("/api/rounds/**").authenticated()
                         .requestMatchers("/api/activity/**").authenticated()
+                        .requestMatchers("/api/notifications/**").authenticated()
                         .requestMatchers("/api/files/**").authenticated()
                         .requestMatchers("/api/users/**").authenticated()
                         .requestMatchers("/oauth2/**", "/login/oauth2/**").permitAll()

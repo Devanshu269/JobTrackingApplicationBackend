@@ -1,8 +1,11 @@
 package com.jobtracker.controller;
 
+import com.jobtracker.dto.JobApplicationPatchDto;
 import com.jobtracker.dto.JobApplicationRequestDto;
 import com.jobtracker.dto.JobApplicationResponseDto;
 import com.jobtracker.dto.JobStatsResponseDto;
+import com.jobtracker.dto.PagedResponseDto;
+import com.jobtracker.dto.TrendPointDto;
 import com.jobtracker.enums.JobType;
 import com.jobtracker.enums.Priority;
 import com.jobtracker.enums.Status;
@@ -16,6 +19,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -32,14 +36,36 @@ public class JobApplicationController {
 
     private final JobApplicationService jobApplicationService;
 
+    /**
+     * @param page zero-based, defaults to 0
+     * @param size defaults to 20, clamped to 100
+     */
     @GetMapping
-    public ResponseEntity<List<JobApplicationResponseDto>> listJobs(Authentication authentication,
-                                                                    @RequestParam(required = false) Status status,
-                                                                    @RequestParam(required = false) Priority priority,
-                                                                    @RequestParam(required = false) JobType jobType,
-                                                                    @RequestParam(required = false) String search) {
+    public ResponseEntity<PagedResponseDto<JobApplicationResponseDto>> listJobs(Authentication authentication,
+                                                                                @RequestParam(required = false) Status status,
+                                                                                @RequestParam(required = false) Priority priority,
+                                                                                @RequestParam(required = false) JobType jobType,
+                                                                                @RequestParam(required = false) String search,
+                                                                                @RequestParam(required = false) Integer page,
+                                                                                @RequestParam(required = false) Integer size) {
         User user = (User) authentication.getPrincipal();
-        return ResponseEntity.ok(jobApplicationService.listJobs(user, status, priority, jobType, search));
+        return ResponseEntity.ok(jobApplicationService.listJobs(user, status, priority, jobType, search, page, size));
+    }
+
+    /**
+     * Applications per day, oldest first, every day in the window present and zero-filled.
+     *
+     * <p>Exists so the weekly-trend chart survives pagination — it previously derived the same
+     * numbers client-side from the full jobs list, which would silently start computing over a
+     * single page.
+     *
+     * @param days window length, defaults to 7, clamped to 1..365
+     */
+    @GetMapping("/trend")
+    public ResponseEntity<List<TrendPointDto>> getTrend(Authentication authentication,
+                                                        @RequestParam(required = false) Integer days) {
+        User user = (User) authentication.getPrincipal();
+        return ResponseEntity.ok(jobApplicationService.getTrend(user, days));
     }
 
     @GetMapping("/stats")
@@ -67,6 +93,19 @@ public class JobApplicationController {
                                                                @Valid @RequestBody JobApplicationRequestDto dto) {
         User user = (User) authentication.getPrincipal();
         return ResponseEntity.ok(jobApplicationService.updateJob(user, jobId, dto));
+    }
+
+    /**
+     * Partial update — omitted (and null) fields are left untouched. Built for the kanban board,
+     * where dragging a card should send only {@code {"status": "..."}} rather than the whole
+     * object. Still logs a STATUS_CHANGED activity event when the status actually moves.
+     */
+    @PatchMapping("/{jobId}")
+    public ResponseEntity<JobApplicationResponseDto> patchJob(Authentication authentication,
+                                                              @PathVariable Integer jobId,
+                                                              @Valid @RequestBody JobApplicationPatchDto dto) {
+        User user = (User) authentication.getPrincipal();
+        return ResponseEntity.ok(jobApplicationService.patchJob(user, jobId, dto));
     }
 
     @DeleteMapping("/{jobId}")

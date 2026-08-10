@@ -59,6 +59,13 @@ public class User {
     @Column(name = "is_active", nullable = false, columnDefinition = "BOOL")
     private Boolean isActive = true;
 
+    /**
+     * Global opt-out for reminder email. Checked by ReminderService before dispatching.
+     * No push equivalent — there is no push transport to gate (see V3 migration).
+     */
+    @Column(name = "email_notifications", nullable = false, columnDefinition = "BOOL")
+    private Boolean emailNotifications = true;
+
     @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<JobApplication> jobApplications;
 }

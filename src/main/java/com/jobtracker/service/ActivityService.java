@@ -1,6 +1,7 @@
 package com.jobtracker.service;
 
 import com.jobtracker.dto.ActivityResponseDto;
+import com.jobtracker.dto.PagedResponseDto;
 import com.jobtracker.enums.ActivityAction;
 import com.jobtracker.enums.Status;
 import com.jobtracker.model.ActivityLog;
@@ -65,16 +66,18 @@ public class ActivityService {
         save(user, job, action, current, previousStatus);
     }
 
-    public List<ActivityResponseDto> listRecent(User user, Integer requestedLimit) {
+    /**
+     * Paged, newest first. The table only ever grows, so {@code size} is capped rather than
+     * trusted — an unbounded read here is never valid.
+     */
+    public PagedResponseDto<ActivityResponseDto> listRecent(User user, Integer page, Integer size) {
         // Math.clamp is Java 21; this project targets 17.
-        int limit = requestedLimit == null
-                ? DEFAULT_LIMIT
-                : Math.max(1, Math.min(requestedLimit, MAX_LIMIT));
-        return activityLogRepository
-                .findByUserIdOrderByCreatedAtDesc(user.getUserId(), PageRequest.of(0, limit))
-                .stream()
-                .map(this::toDto)
-                .toList();
+        int pageSize = size == null ? DEFAULT_LIMIT : Math.max(1, Math.min(size, MAX_LIMIT));
+        int pageNumber = page == null ? 0 : Math.max(0, page);
+        return PagedResponseDto.from(
+                activityLogRepository.findByUserIdOrderByCreatedAtDesc(
+                        user.getUserId(), PageRequest.of(pageNumber, pageSize)),
+                this::toDto);
     }
 
     private void save(User user, JobApplication job, ActivityAction action, Status status, Status previousStatus) {

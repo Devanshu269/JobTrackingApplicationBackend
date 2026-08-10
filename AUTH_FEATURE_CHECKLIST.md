@@ -30,7 +30,9 @@ All paths below are relative to the `/jobTracking` context path. The frontend-fa
 - [x] `DELETE /me/default-resume` — clear it (needs its own verb because the DTO is `@NotBlank`)
 
 ### Job applications (`/api/jobs`) — all **require auth**, all scoped to the caller
-- [x] `GET /` — list, newest first, optional `?status=` `?priority=` `?jobType=` `?search=` filters
+- [x] `GET /` — **paged** list (`?page=` `?size=`), newest first, optional `?status=` `?priority=` `?jobType=` `?search=` filters
+- [x] `GET /trend` — applications per day, zero-filled, `?days=` default 7 clamped 1–365
+- [x] `PATCH /{jobId}` — partial update; omitted/null fields untouched
 - [x] `GET /stats` — dashboard counts `{ total, byStatus }`, every Status key zero-filled
 - [x] `GET /{jobId}` — one job
 - [x] `POST /` — create, 201
@@ -42,7 +44,10 @@ All paths below are relative to the `/jobTracking` context path. The frontend-fa
 - [x] `GET /{fileId}` — exchanges an opaque ref for a 5-minute signed download URL
 
 ### Activity log (`/api/activity`) — **requires auth**
-- [x] `GET /` — recent audit events, newest first, `?limit=` defaults 20 / clamped 1–100
+- [x] `GET /` — recent audit events, newest first, **paged** (`?page=` `?size=`, size clamped 1–100)
+
+### Notifications (`/api/notifications`) — **requires auth**
+- [x] `GET /` — bell feed of due follow-ups, capped at 20
 
 ### Cross-job rounds (`/api/rounds`) — **requires auth**
 - [x] `GET /upcoming` — every scheduled round across all the caller's jobs, soonest first, with company/role flattened in
@@ -162,6 +167,18 @@ All paths below are relative to the `/jobTracking` context path. The frontend-fa
 - [x] `PasswordResetToken` gained `createdAt` (`@CreatedDate`) to back the cooldown query
 - [x] **`TokenCleanupService`** — daily 03:30, purges expired `refresh_tokens` and `password_reset_tokens`, and evicts stale in-memory rate-limiter keys. `@Transactional` is load-bearing: both are derived `deleteBy` methods, the trap that has produced misleading empty 403s twice in this codebase. Verified live by temporarily running it every 30s — deleted all 3 expired rows, left both live ones, no exception
 - [x] `RateLimiter` is process-local by design; two instances would double the effective allowance. Fine for a single deployment, swap for Redis/Bucket4j if it ever scales out
+
+## Frontend-requested API work (2026-08-10) — code-complete, runtime-tested
+- [x] **`reminderSentAt` on JobApplicationResponseDto** — was already shipped earlier the same day; the request was for something that existed
+- [x] **`GET /api/jobs/trend`** — built BEFORE pagination, deliberately: the chart was derived client-side from the full jobs list and would have silently started computing over one page. Buckets in Java on `LocalDateTime.toLocalDate()` rather than SQL `DATE()`, because the column stores a UTC-shifted value and SQL grouping moves late-evening entries into the wrong day. Zero-fills every day in the window
+- [x] **Pagination on `/api/jobs` and `/api/activity`** — custom `PagedResponseDto` rather than serialising Spring Data's `Page`, whose shape is version-dependent and leaks internals. `size` clamped to 100 on both
+- [x] **`PATCH /api/jobs/{jobId}`** — omitted *and* null both mean "leave unchanged". A plain POJO can't distinguish an omitted key from an explicit null (Jackson gives null for both), so treating null as "clear" would make `{"status":"X"}` wipe every other column — the exact bug PATCH exists to prevent. Clearing a field still goes through PUT. Captures old status before mutating so STATUS_CHANGED still logs correctly
+- [x] **`emailNotifications`** via Flyway V3, exposed on `UserDto`, `PATCH /api/users/me/preferences`, and honoured by ReminderService. Opted-out users get `reminderSentAt` stamped anyway so their overdue jobs aren't re-selected every tick forever
+- [x] **`GET /api/notifications`** — due follow-ups for the bell. Distinct from `findDueReminders`: ignores `reminderSentAt` (an emailed follow-up is still outstanding) and has no lower bound (an old overdue follow-up is worth showing in-app even when emailing it would be noise)
+- [x] **`pushNotifications` deliberately NOT added.** There is no push transport anywhere in either repo — no service worker, no FCM, no web-push keys. A toggle storing a value nothing reads is the same "shipping fiction" that got the notification toggles removed from Settings in the first place. Add it with a real transport, not before
+- [x] Runtime-tested: paging metadata and clamping, filters alongside paging, trend zero-fill totalling all 25 jobs, PATCH leaving priority/notes/company/appliedDate untouched while logging STATUS_CHANGED, PATCH 400 on bad enum and 404 on another user's job, preferences round-trip, notifications empty then populated
+- [ ] **BREAKING for clients:** `GET /api/jobs` and `GET /api/activity` now return a page object, not a bare array. `/api/activity`'s `?limit=` is replaced by `?size=`
+- [ ] Endpoint path differs from the frontend's spec: preferences live at `PATCH /api/users/me/preferences`, not `/api/auth/me/preferences`, to match the other profile mutations
 
 ## JwtUtil — done
 - [x] @Value-injected secret + expiration (access: 15 min via jwt.expiration)

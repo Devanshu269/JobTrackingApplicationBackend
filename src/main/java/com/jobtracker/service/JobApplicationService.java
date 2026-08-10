@@ -1,9 +1,12 @@
 package com.jobtracker.service;
 
 import com.jobtracker.Utils.JobUtils;
+import com.jobtracker.dto.JobApplicationPatchDto;
 import com.jobtracker.dto.JobApplicationRequestDto;
 import com.jobtracker.dto.JobApplicationResponseDto;
 import com.jobtracker.dto.JobStatsResponseDto;
+import com.jobtracker.dto.PagedResponseDto;
+import com.jobtracker.dto.TrendPointDto;
 import com.jobtracker.enums.JobType;
 import com.jobtracker.enums.Priority;
 import com.jobtracker.enums.Status;
@@ -13,15 +16,20 @@ import com.jobtracker.model.User;
 import com.jobtracker.repository.JobApplicationRepository;
 import jakarta.persistence.criteria.Predicate;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -31,12 +39,51 @@ public class JobApplicationService {
     private final JobUtils jobUtils;
     private final ActivityService activityService;
 
-    public List<JobApplicationResponseDto> listJobs(User user, Status status, Priority priority, JobType jobType, String search) {
+    /** Max rows per page — stops a client asking for the whole table with ?size=100000. */
+    public static final int MAX_PAGE_SIZE = 100;
+    public static final int DEFAULT_PAGE_SIZE = 20;
+
+    public PagedResponseDto<JobApplicationResponseDto> listJobs(User user, Status status, Priority priority,
+                                                                JobType jobType, String search,
+                                                                Integer page, Integer size) {
         Specification<JobApplication> spec = buildSpec(user.getUserId(), status, priority, jobType, search);
-        return jobApplicationRepository.findAll(spec, Sort.by(Sort.Direction.DESC, "createdAt"))
+        Pageable pageable = PageRequest.of(
+                page == null ? 0 : Math.max(0, page),
+                size == null ? DEFAULT_PAGE_SIZE : Math.max(1, Math.min(size, MAX_PAGE_SIZE)),
+                Sort.by(Sort.Direction.DESC, "createdAt"));
+        return PagedResponseDto.from(jobApplicationRepository.findAll(spec, pageable), jobUtils::toJobResponseDto);
+    }
+
+    /**
+     * Applications-per-day for the last {@code days} days, oldest first.
+     *
+     * <p>Exists specifically so the chart survives pagination: it used to be derived client-side
+     * from the full jobs list, which silently starts computing over a single page the moment
+     * {@code GET /api/jobs} is paged.
+     *
+     * <p>Every day in the window is present, zero-filled, so the chart can render a fixed number
+     * of bars without gap-filling.
+     */
+    public List<TrendPointDto> getTrend(User user, Integer days) {
+        int window = days == null ? 7 : Math.max(1, Math.min(days, 365));
+        LocalDate today = LocalDate.now();
+        LocalDate from = today.minusDays(window - 1L);
+
+        Map<LocalDate, Long> counts = jobApplicationRepository
+                .findTrendTimestamps(user.getUserId(), from.atStartOfDay())
                 .stream()
-                .map(jobUtils::toJobResponseDto)
-                .toList();
+                .map(LocalDateTime::toLocalDate)
+                .collect(Collectors.groupingBy(d -> d, Collectors.counting()));
+
+        List<TrendPointDto> points = new ArrayList<>(window);
+        for (int i = 0; i < window; i++) {
+            LocalDate day = from.plusDays(i);
+            TrendPointDto point = new TrendPointDto();
+            point.setDate(day);
+            point.setCount(counts.getOrDefault(day, 0L));
+            points.add(point);
+        }
+        return points;
     }
 
     public JobApplicationResponseDto getJob(User user, Integer jobId) {
@@ -61,6 +108,21 @@ public class JobApplicationService {
         // reading the status afterwards returns the new value and every change logs "X -> X".
         Status previousStatus = job.getStatus();
         jobUtils.applyToEntity(dto, job);
+        JobApplication saved = jobApplicationRepository.save(job);
+        activityService.recordJobUpdated(user, saved, previousStatus);
+        return jobUtils.toJobResponseDto(saved);
+    }
+
+    /**
+     * Partial update. Same activity-logging behaviour as a full update — in particular the old
+     * status is captured before the entity is touched, so a kanban drag that sends only
+     * {@code {"status": "INTERVIEW"}} still produces a correct STATUS_CHANGED event.
+     */
+    @Transactional
+    public JobApplicationResponseDto patchJob(User user, Integer jobId, JobApplicationPatchDto dto) {
+        JobApplication job = findOwnedJob(user, jobId);
+        Status previousStatus = job.getStatus();
+        jobUtils.applyPatchToEntity(dto, job);
         JobApplication saved = jobApplicationRepository.save(job);
         activityService.recordJobUpdated(user, saved, previousStatus);
         return jobUtils.toJobResponseDto(saved);

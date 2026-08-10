@@ -13,5 +13,6 @@ public class UserDto {
     private String email;
     private String avatarUrl;
     private String defaultResumeUrl;
+    private Boolean emailNotifications;
     private Provider provider;
 }

@@ -66,6 +66,14 @@ public class ReminderService {
         int sent = 0;
         for (JobApplication job : due) {
             try {
+                // Global per-user opt-out. Checked here rather than in the query so the row is
+                // still marked as handled — otherwise an opted-out user's overdue jobs would be
+                // re-selected on every tick forever.
+                if (!Boolean.TRUE.equals(job.getUser().getEmailNotifications())) {
+                    job.setReminderSentAt(LocalDateTime.now());
+                    jobApplicationRepository.save(job);
+                    continue;
+                }
                 emailService.sendFollowUpReminder(
                         job.getUser().getEmail(), job.getCompanyName(), job.getJobRole(), job.getStatus().name());
                 // Marked only after the send succeeds. On failure the row keeps a null

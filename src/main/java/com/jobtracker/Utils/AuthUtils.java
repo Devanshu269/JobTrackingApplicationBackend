@@ -28,6 +28,7 @@ public class AuthUtils {
         dto.setEmail(user.getEmail());
         dto.setAvatarUrl(user.getAvatarUrl());
         dto.setDefaultResumeUrl(user.getDefaultResumeUrl());
+        dto.setEmailNotifications(user.getEmailNotifications());
         dto.setProvider(user.getProvider());
         return dto;
     }

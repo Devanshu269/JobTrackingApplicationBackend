@@ -30,6 +30,47 @@ public interface JobApplicationRepository extends JpaRepository<JobApplication, 
     List<StatusCount> countGroupedByStatus(@Param("userId") Integer userId);
 
     /**
+     * Raw timestamps for the applications-per-day chart, newest bound applied by the caller.
+     *
+     * <p>Returns the timestamps rather than a SQL {@code GROUP BY DATE(...)} on purpose. The
+     * column stores a UTC-shifted value (serverTimezone=UTC), so grouping in SQL buckets by the
+     * <i>UTC</i> date and silently moves late-evening or early-morning entries into the wrong
+     * day. Hibernate reads a LocalDateTime back as the value the user originally submitted, so
+     * bucketing in Java on {@code toLocalDate()} matches what they'd expect to see — and matches
+     * what the frontend's own client-side version already computes.
+     *
+     * <p>Volumes here are one user's applications over a few weeks, so loading the timestamps is
+     * cheap; revisit if that ever stops being true.
+     */
+    @Query("""
+            SELECT COALESCE(j.appliedDate, j.createdAt) FROM JobApplication j
+            WHERE j.user.userId = :userId
+              AND COALESCE(j.appliedDate, j.createdAt) >= :from
+            """)
+    List<LocalDateTime> findTrendTimestamps(@Param("userId") Integer userId,
+                                            @Param("from") LocalDateTime from);
+
+    /**
+     * Everything currently worth surfacing in the notification bell: follow-ups that are due and
+     * not in a terminal state. Unlike findDueReminders this ignores reminderSentAt — an already
+     * emailed follow-up is still outstanding until the user acts on it — and has no lower bound,
+     * because an old overdue follow-up is exactly what a user would want reminding about in-app
+     * even though emailing it would be noise.
+     */
+    @Query("""
+            SELECT j FROM JobApplication j
+            WHERE j.user.userId = :userId
+              AND j.followUpDate IS NOT NULL
+              AND j.followUpDate <= :now
+              AND j.status <> :excludedStatus
+            ORDER BY j.followUpDate ASC
+            """)
+    List<JobApplication> findDueFollowUps(@Param("userId") Integer userId,
+                                          @Param("now") LocalDateTime now,
+                                          @Param("excludedStatus") Status excludedStatus,
+                                          Pageable pageable);
+
+    /**
      * Jobs whose follow-up is due and whose reminder hasn't gone out yet.
      *
      * <p>Not user-scoped — the only caller is the scheduler, which legitimately runs across all
