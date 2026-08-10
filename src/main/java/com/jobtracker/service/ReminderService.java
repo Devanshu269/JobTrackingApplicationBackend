@@ -34,6 +34,13 @@ public class ReminderService {
     private int batchSize;
 
     /**
+     * How far back a due follow-up may be and still get emailed. Anything older is skipped
+     * permanently — see the backfill-guard note on findDueReminders.
+     */
+    @Value("${app.reminders.max-overdue-days:7}")
+    private int maxOverdueDays;
+
+    /**
      * Deliberately <b>not</b> {@code @Transactional}.
      *
      * <p>Wrapping the loop in one transaction would mean a later failure rolls back the
@@ -47,8 +54,9 @@ public class ReminderService {
             return;
         }
 
+        LocalDateTime now = LocalDateTime.now();
         List<JobApplication> due = jobApplicationRepository.findDueReminders(
-                LocalDateTime.now(), Status.REJECTED, PageRequest.of(0, batchSize));
+                now, now.minusDays(maxOverdueDays), Status.REJECTED, PageRequest.of(0, batchSize));
 
         if (due.isEmpty()) {
             return;

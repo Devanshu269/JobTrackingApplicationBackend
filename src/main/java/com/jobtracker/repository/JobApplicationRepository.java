@@ -38,6 +38,11 @@ public interface JobApplicationRepository extends JpaRepository<JobApplication, 
      * <p>JOIN FETCH on the user because the scheduler needs the email address and runs outside
      * any request-bound persistence context. Pageable caps the batch so one tick can't try to
      * send thousands of emails.
+     *
+     * <p><b>{@code notBefore} is the backfill guard.</b> Without a lower bound, the first run
+     * after enabling reminders — or after any extended downtime — would email every follow-up
+     * that has ever come due, including ones months stale. A follow-up that old is no longer
+     * actionable, and mass-sending it is the one failure mode here that reaches real inboxes.
      */
     @Query("""
             SELECT j FROM JobApplication j
@@ -45,11 +50,13 @@ public interface JobApplicationRepository extends JpaRepository<JobApplication, 
             WHERE j.reminderEnabled = true
               AND j.followUpDate IS NOT NULL
               AND j.followUpDate <= :now
+              AND j.followUpDate >= :notBefore
               AND j.reminderSentAt IS NULL
               AND j.status <> :excludedStatus
             ORDER BY j.followUpDate ASC
             """)
     List<JobApplication> findDueReminders(@Param("now") LocalDateTime now,
+                                          @Param("notBefore") LocalDateTime notBefore,
                                           @Param("excludedStatus") Status excludedStatus,
                                           Pageable pageable);
 

@@ -3,9 +3,12 @@ package com.jobtracker.model;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
+import org.springframework.data.annotation.CreatedDate;
+import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 import java.time.LocalDateTime;
 
+@EntityListeners(AuditingEntityListener.class)
 @Table(name = "password_reset_tokens")
 @Entity
 @Getter
@@ -29,4 +32,9 @@ public class PasswordResetToken {
 
     @Column(name = "used", nullable = false, columnDefinition = "BOOL")
     private Boolean used = false;
+
+    /** Backs the per-account resend cooldown on forgot-password. */
+    @CreatedDate
+    @Column(name = "created_at", nullable = false)
+    private LocalDateTime createdAt;
 }

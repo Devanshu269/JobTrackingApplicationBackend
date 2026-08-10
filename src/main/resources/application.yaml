@@ -63,12 +63,22 @@ app:
   password-reset:
     redirect-uri: ${PASSWORD_RESET_REDIRECT_URI:http://localhost:5173/reset-password}
     token-expiration-minutes: 30
+    # Per-account cooldown between reset emails. Applied silently — surfacing it as an error
+    # would tell an attacker the address is registered.
+    resend-cooldown-minutes: 2
   reminders:
     # Set REMINDERS_ENABLED=false to stop the scheduler sending real email in dev.
     enabled: ${REMINDERS_ENABLED:true}
     # 6-field Spring cron (sec min hour dom mon dow). Default: top of every hour.
     cron: ${REMINDERS_CRON:0 0 * * * *}
     batch-size: 50
+    # Backfill guard: follow-ups older than this are skipped permanently rather than emailed.
+    # Stops the first run after enabling (or after downtime) blasting a stale backlog.
+    max-overdue-days: ${REMINDERS_MAX_OVERDUE_DAYS:7}
+  cleanup:
+    enabled: ${CLEANUP_ENABLED:true}
+    # Daily at 03:30.
+    cron: ${CLEANUP_CRON:0 30 3 * * *}
 
 jwt:
   secret: ${JWT_SECRET:changeme}

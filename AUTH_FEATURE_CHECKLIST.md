@@ -106,7 +106,7 @@ All paths below are relative to the `/jobTracking` context path. The frontend-fa
 - [x] `?limit` clamped 1–100 rather than rejected. Unlike `job_applications` this table only ever grows, so unbounded reads are never valid
 - [x] Composite index on `(user_id, created_at)` — every read is "this user's rows, newest first"
 - [x] Runtime-tested: full lifecycle (create → status change → notes-only edit → round → offer → delete) logged correctly with accurate `previousStatus`; history survives the job delete with snapshots intact; cross-user isolation; limit clamping at both ends
-- [ ] `JOB_DELETED` needs adding to the frontend's `ACTIVITY_ACTIONS` map — it currently falls through to the `JOB_UPDATED` wording
+- [x] `JOB_DELETED` added to the frontend's `ACTIVITY_ACTIONS` map (verified in src/lib/activity.js 2026-08-10)
 
 ## Follow-up reminders — code-complete, dry-run tested (no live email sent)
 - [x] `@EnableScheduling` via `SchedulingConfig`; `ReminderService` runs on `app.reminders.cron` (hourly default), batch-capped, and can be disabled with `REMINDERS_ENABLED=false`
@@ -118,7 +118,7 @@ All paths below are relative to the `/jobTracking` context path. The frontend-fa
 - [x] Dry-run tested: query selects exactly the due row and excludes future / opt-out / rejected; marking sent drops it out; re-arm and no-false-re-arm both verified
 - [ ] Not tested: actual SMTP delivery of a reminder (deliberate — outward-facing). The transport itself is proven by the password-reset flow
 - [ ] A permanently-failing address retries forever — no attempt counter or dead-letter handling
-- [ ] First run after enabling will email every already-overdue follow-up at once. Worth a backfill guard before this points at real users
+- [x] Backfill guard: `app.reminders.max-overdue-days` (default 7) bounds the query below as well as above, so enabling reminders — or recovering from downtime — can't blast a stale backlog
 
 ## File upload — code-complete, runtime-tested against real Cloudinary
 - [x] `POST /api/files` + `GET /api/files/{id}`, backed by Cloudinary (already in pom.xml; credentials now in `local-secrets.properties`, cloud name `igmsrg7x`)
@@ -134,6 +134,17 @@ All paths below are relative to the `/jobTracking` context path. The frontend-fa
 - [ ] Signed-URL *expiry* not directly observed (would need a 5-minute wait) — the `expires_at` parameter is present and Cloudinary enforces it
 - [ ] Nothing ever deletes Cloudinary objects. Deliberate (immutability), but means storage grows forever and orphans accumulate when a job is deleted
 
+## Pre-launch hardening — code-complete, runtime-tested
+- [x] **Reminder backfill guard.** `findDueReminders` now has a lower bound (`followUpDate >= now - max-overdue-days`, default 7). Verified: a 2-day-overdue follow-up sends, a 30-day-stale one doesn't — without the guard *both* did. This was the only failure mode here that reaches real inboxes
+- [x] **Rate limiting on `/forgot-password`**, two independent layers:
+  - Per-IP sliding window (`RateLimiter`, 5 per 15 min) → **429**. Keyed on IP rather than email deliberately: an email-keyed 429 would confirm which addresses are registered
+  - Per-account cooldown (`app.password-reset.resend-cooldown-minutes`, default 2) enforced in `AuthService` and **silent** — returns the same generic 200, because surfacing it would be exactly the enumeration oracle the endpoint was designed to avoid. Verified: 3 requests from 3 different IPs → 3× 200, but only 1 token row created
+  - Verified non-enumerating: registered and unregistered emails return byte-identical status and body
+- [x] **`X-Forwarded-For` parsed from the RIGHT, not the left.** First implementation took the leftmost entry — the intuitive choice — which let anyone reset their own rate limit by sending a forged header (confirmed by test). Proxies *append*, so the rightmost value is the one your own proxy observed; everything left of it is client-supplied
+- [x] `PasswordResetToken` gained `createdAt` (`@CreatedDate`) to back the cooldown query
+- [x] **`TokenCleanupService`** — daily 03:30, purges expired `refresh_tokens` and `password_reset_tokens`, and evicts stale in-memory rate-limiter keys. `@Transactional` is load-bearing: both are derived `deleteBy` methods, the trap that has produced misleading empty 403s twice in this codebase. Verified live by temporarily running it every 30s — deleted all 3 expired rows, left both live ones, no exception
+- [x] `RateLimiter` is process-local by design; two instances would double the effective allowance. Fine for a single deployment, swap for Redis/Bucket4j if it ever scales out
+
 ## JwtUtil — done
 - [x] @Value-injected secret + expiration (access: 15 min via jwt.expiration)
 - [x] SecretKey built once in @PostConstruct init()
@@ -146,7 +157,7 @@ All paths below are relative to the `/jobTracking` context path. The frontend-fa
 - [x] Chose per-session table over a single column on User — deliberately supports multi-device concurrent login
 - [x] jwt.refresh-expiration = 7 days
 - [x] RefreshTokenRepository — lookup by token, delete-all-by-user (logout-all + used again by reset-password to kill sessions)
-- [ ] `deleteByExpiresAtBefore` actually *called* anywhere (method exists, unused — see cleanup job below)
+- [x] `deleteByExpiresAtBefore` now called by `TokenCleanupService` (daily 03:30)
 
 ## AuthService — code-complete, runtime-tested
 - [x] `signup(dto, deviceInfo)` — email uniqueness check, hash password, provider=LOCAL, issue tokens
@@ -192,7 +203,7 @@ All paths below are relative to the `/jobTracking` context path. The frontend-fa
 - [x] `forgotPassword`: **generic response regardless of outcome** — same 200 whether the email exists, doesn't exist, or belongs to an OAuth-provider account. Deliberate anti-enumeration design (discussed explicitly — don't let the endpoint reveal which emails have accounts)
 - [x] `resetPassword` is `@Transactional` (calls derived `deleteByUser`, which needs it) — single-use token, and a successful reset deletes all that user's refresh tokens (kills every existing session)
 - [x] Verified via curl + direct DB checks: non-existent email → same generic 200, no row created; real LOCAL user → row created, real email sent (no SMTP exception thrown); garbage token → 401; real token → 204; token reused → 401; login with new password → 200; old refresh tokens confirmed gone from DB after reset
-- [ ] Frontend `/reset-password` page (not built yet — backend-only checklist, noted here since it's the missing link): reads `token` off the query string (the email link points to `app.password-reset.redirect-uri` + `?token=...`), shows new-password + confirm-password (confirm checked client-side only, same as change-password), submits `{token, newPassword}` to `POST /reset-password`, redirects to login on 204. Should also handle someone landing on `/reset-password` with no `token` in the URL at all (direct navigation, not via the email link) — show a message pointing back to forgot-password instead of a broken form.
+- [x] Frontend `/reset-password` page — built (src/pages/ResetPasswordPage.jsx). Original spec, kept for reference: reads `token` off the query string (the email link points to `app.password-reset.redirect-uri` + `?token=...`), shows new-password + confirm-password (confirm checked client-side only, same as change-password), submits `{token, newPassword}` to `POST /reset-password`, redirects to login on 204. Should also handle someone landing on `/reset-password` with no `token` in the URL at all (direct navigation, not via the email link) — show a message pointing back to forgot-password instead of a broken form.
 
 ## AuthController — code-complete, runtime-tested
 - [x] All endpoints listed at top of this file are wired to `AuthService`, no business logic in the controller layer itself
@@ -264,15 +275,12 @@ These are the remaining gaps in User read/update coverage. Deliberately parked �
 - [ ] `createdAt` not exposed on `UserDto` — trivial to add if a profile page wants "Member since March 2026".
 
 ## Not done yet
-- [ ] Scheduled cleanup job for expired `refresh_tokens` AND `password_reset_tokens` rows (`@Scheduled` + `@EnableScheduling`) — `deleteByExpiresAtBefore` exists on RefreshTokenRepository but is unused; no equivalent exists yet on PasswordResetTokenRepository
 - [ ] Refresh token rotation — expiresAt fixed at creation, never extended; an actively-used session still force-logs-out exactly 7 days after login
-- [ ] Rate limiting on `/forgot-password` (currently nothing stops someone spamming reset emails at a victim's inbox)
 - [ ] Pagination on `GET /api/jobs` — currently returns every matching row. Fine at current scale, will need `Pageable` once a user has hundreds of applications
 - [ ] `PUT` endpoints are full-replace, not `PATCH` — omitting a field nulls it. Fine if the frontend always sends the whole object back (typical for an edit form), but a real `PATCH` would be friendlier for one-field updates like a drag-and-drop status change on a kanban board
 - [ ] AI features — `job_ai_results` table and entity exist, no endpoints and no Gemini integration (`GEMINI_API_KEY` still a placeholder)
-- [ ] File upload — Cloudinary not integrated (`CLOUDINARY_*` still placeholders). `resumeUrl`/`coverLetterUrl` are plain strings the client sets itself
+- [x] File upload — built, Cloudinary integrated (cloud `igmsrg7x`). See the File upload section above
 - [ ] `JobApplicationRepository.findByUser_UserIdAndJobId` — old method returning `List` where at most one row can match (jobId is the PK). Superseded by `findByJobIdAndUser_UserId` returning `Optional`; the old one is now unused and can be deleted
-- [ ] Client-side password max — backend now allows up to 64 chars but `src/lib/validation.js` has no upper bound, so a 65+ char passphrase still 400s. Small gap, frontend-side fix
 
 ## Known housekeeping (low priority)
 - [ ] Rotate local MySQL root password (old value is in earlier git history; local dev DB only, not internet-exposed)
@@ -293,5 +301,6 @@ These are the remaining gaps in User read/update coverage. Deliberately parked �
 - `ddl-auto: update` also never updates an existing **MySQL ENUM column's** allowed-value list when the Java enum changes. Renaming/adding an enum constant needs a manual `ALTER TABLE ... MODIFY COLUMN x ENUM(...)`. Hit this fixing the `Priority.HiGH` → `HIGH` typo on 2026-08-09 (table was empty, so no data migration was needed — would have been much worse later).
 - Enum constant names are part of the public API — they're the literal strings sent over JSON. `RoundType` is PascalCase (`Technical`, `SystemDesign`) while `Status`/`Priority`/`Outcome` are UPPERCASE; easy to get wrong from the frontend.
 - Never return JPA entities from a controller. Returning `JobApplication` directly serializes its `user`, which recurses back into `user.jobApplications` and also exposes the password hash. Every endpoint maps to a `*ResponseDto` instead.
+- **`X-Forwarded-For` must be read from the right-hand end.** Proxies append, so the leftmost entry is whatever the client sent and is trivially forged; the rightmost is what your own proxy actually saw. Taking `split(',')[0]` — which looks correct — makes any IP-based rate limit bypassable with a made-up header.
 - **`LocalDateTime` is stored shifted, and raw SQL against it is a trap.** The JDBC URL sets `serverTimezone=UTC`, so a `LocalDateTime` of `09:00` written from an IST machine lands in MySQL as `03:30`. It round-trips correctly through the API (write 09:00, read 09:00) and Hibernate converts both sides of a query consistently, so application code is fine. But hand-written SQL is not: `follow_up_date <= NOW()` compares a UTC column against a SYSTEM-zone `NOW()` and is off by the UTC offset — verified by a row 2 minutes in the *future* reporting as due. Use `UTC_TIMESTAMP()` in ad-hoc SQL, and expect DBeaver to display shifted times.
 - Ownership checks must be part of the **query**, not a post-fetch `if`. `findByJobIdAndUser_UserId(jobId, userId)` makes "not yours" and "doesn't exist" the same code path, which is what lets every miss return an indistinguishable 404.

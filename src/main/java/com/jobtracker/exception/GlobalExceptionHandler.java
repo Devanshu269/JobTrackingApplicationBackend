@@ -75,6 +75,15 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error);
     }
 
+    @ExceptionHandler(RateLimitExceededException.class)
+    public ResponseEntity<ErrorResponseDto> handleRateLimitExceeded(RateLimitExceededException ex) {
+        ErrorResponseDto error = new ErrorResponseDto();
+        error.setTimestamp(LocalDateTime.now());
+        error.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
+        error.setMessage(ex.getMessage());
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(error);
+    }
+
     @ExceptionHandler(InvalidFileException.class)
     public ResponseEntity<ErrorResponseDto> handleInvalidFileException(InvalidFileException ex) {
         ErrorResponseDto error = new ErrorResponseDto();

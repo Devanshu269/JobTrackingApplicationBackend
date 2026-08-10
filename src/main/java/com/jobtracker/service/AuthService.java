@@ -54,6 +54,9 @@ public class AuthService {
     @Value("${app.password-reset.token-expiration-minutes}")
     private long passwordResetTokenExpirationMinutes;
 
+    @Value("${app.password-reset.resend-cooldown-minutes:2}")
+    private long resendCooldownMinutes;
+
     public AuthResponseDto signup(SignupRequestDto dto, String deviceInfo) {
         Optional<User> userOptional = userRepository.findByEmail(dto.getEmail());
         if (userOptional.isPresent()) {
@@ -162,6 +165,15 @@ public class AuthService {
         }
 
         User user = userOptional.get();
+
+        // Per-account cooldown, so repeated submissions can't be used to flood someone's inbox.
+        // Silently returns — it must NOT surface as an error or a different status code, or the
+        // rate limit itself becomes an oracle telling an attacker the address is registered.
+        LocalDateTime cooldownStart = LocalDateTime.now().minusMinutes(resendCooldownMinutes);
+        if (passwordResetTokenRepository.existsByUser_UserIdAndUsedFalseAndCreatedAtAfter(user.getUserId(), cooldownStart)) {
+            return;
+        }
+
         PasswordResetToken resetToken = new PasswordResetToken();
         resetToken.setToken(UUID.randomUUID().toString());
         resetToken.setUser(user);
