@@ -85,6 +85,16 @@ public class JobApplication {
     @Column(name="reminder_enabled", nullable = false, columnDefinition = "BOOLEAN DEFAULT FALSE")
     private Boolean reminderEnabled = false;
 
+    /**
+     * When the follow-up reminder email actually went out. Null means "not sent yet".
+     *
+     * <p>Exists purely for idempotency: the scheduler runs on a fixed cadence, so without a
+     * marker every tick after followUpDate passes would re-send. Cleared automatically when
+     * followUpDate is changed (see JobUtils.applyToEntity) so a rescheduled follow-up re-arms.
+     */
+    @Column(name = "reminder_sent_at")
+    private LocalDateTime reminderSentAt;
+
     @CreatedDate
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;

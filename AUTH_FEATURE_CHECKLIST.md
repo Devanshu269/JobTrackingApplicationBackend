@@ -37,6 +37,13 @@ All paths below are relative to the `/jobTracking` context path. The frontend-fa
 - [x] `PUT /{jobId}` — full replace (not a patch)
 - [x] `DELETE /{jobId}` — 204, cascades to rounds + AI results
 
+### Files (`/api/files`) — all **require auth**
+- [x] `POST /` — multipart upload (`file` + `purpose`), 201
+- [x] `GET /{fileId}` — exchanges an opaque ref for a 5-minute signed download URL
+
+### Activity log (`/api/activity`) — **requires auth**
+- [x] `GET /` — recent audit events, newest first, `?limit=` defaults 20 / clamped 1–100
+
 ### Cross-job rounds (`/api/rounds`) — **requires auth**
 - [x] `GET /upcoming` — every scheduled round across all the caller's jobs, soonest first, with company/role flattened in
 
@@ -88,6 +95,44 @@ All paths below are relative to the `/jobTracking` context path. The frontend-fa
 - [x] **Ownership lives in the WHERE clause** (`j.user.userId = :userId`) rather than a `findOwnedJob` call — this is the one round query with no parent job to hang the check off
 - [x] `roundDate >= :from` naturally excludes both past rounds and unscheduled (null-date) ones
 - [x] Runtime-tested: correct ordering across two jobs created out of order, past round excluded, null-date round excluded, cross-user isolation verified with a second account, empty case returns `[]` not 404, 401 without a token
+
+## Activity log — code-complete, runtime-tested
+- [x] `activity_log` table + `ActivityLog` entity, written from `ActivityService` on job create/update/delete and round create
+- [x] **No JPA relationships — `userId`/`jobId` are plain columns.** An audit log must outlive what it audits: a deleted job's history still has to render. A real FK would either block the delete (cascade is declared per-association, so a new one wouldn't be covered) or, with an inverse cascade, erase the very history the table exists to keep
+- [x] `companyName`/`jobRole` are **snapshots** taken at write time, not joins — after the job row is gone there's nothing to join to. Side effect: renaming a company doesn't rewrite history, which is correct for an audit trail
+- [x] **Old status captured BEFORE `jobUtils.applyToEntity()`** in `updateJob` — that call mutates the managed entity in place, so reading after it logs every transition as `X -> X`. Same class of bug as the `followUpDate` re-arm below
+- [x] Written from the service layer, **not a JPA `@EntityListener`** — a listener fires on the already-mutated entity and can't tell a status change from a notes edit without `@PostLoad` snapshotting or Envers. The service knows the intent
+- [x] Terminal statuses get their own actions (`OFFER_RECEIVED`/`REJECTED`) rather than a generic `STATUS_CHANGED`; action names match the frontend's existing `ACTIVITY_ACTIONS` map so the swap is one line there
+- [x] `?limit` clamped 1–100 rather than rejected. Unlike `job_applications` this table only ever grows, so unbounded reads are never valid
+- [x] Composite index on `(user_id, created_at)` — every read is "this user's rows, newest first"
+- [x] Runtime-tested: full lifecycle (create → status change → notes-only edit → round → offer → delete) logged correctly with accurate `previousStatus`; history survives the job delete with snapshots intact; cross-user isolation; limit clamping at both ends
+- [ ] `JOB_DELETED` needs adding to the frontend's `ACTIVITY_ACTIONS` map — it currently falls through to the `JOB_UPDATED` wording
+
+## Follow-up reminders — code-complete, dry-run tested (no live email sent)
+- [x] `@EnableScheduling` via `SchedulingConfig`; `ReminderService` runs on `app.reminders.cron` (hourly default), batch-capped, and can be disabled with `REMINDERS_ENABLED=false`
+- [x] Query selects `reminderEnabled = true AND followUpDate <= now AND reminderSentAt IS NULL AND status <> REJECTED`, with `JOIN FETCH` on the user because the scheduler needs the email outside any request-bound persistence context. It is the **one deliberately un-user-scoped query** in the repository
+- [x] New `reminderSentAt` column for idempotency — without it every tick after the date passes re-sends
+- [x] **Changing `followUpDate` clears `reminderSentAt`** so a rescheduled follow-up re-arms; the comparison happens before the field is overwritten in `applyToEntity`. Editing other fields correctly leaves the marker alone
+- [x] **Deliberately NOT `@Transactional` over the loop.** One transaction would roll back sent-markers for emails that already left the server, and those can't be un-sent — the next tick would deliver duplicates. Each save commits individually, right after its send succeeds
+- [x] Per-job try/catch so one bad address can't abort the batch; a failure leaves `reminderSentAt` null so the row retries next tick
+- [x] Dry-run tested: query selects exactly the due row and excludes future / opt-out / rejected; marking sent drops it out; re-arm and no-false-re-arm both verified
+- [ ] Not tested: actual SMTP delivery of a reminder (deliberate — outward-facing). The transport itself is proven by the password-reset flow
+- [ ] A permanently-failing address retries forever — no attempt counter or dead-letter handling
+- [ ] First run after enabling will email every already-overdue follow-up at once. Worth a backfill guard before this points at real users
+
+## File upload — code-complete, runtime-tested against real Cloudinary
+- [x] `POST /api/files` + `GET /api/files/{id}`, backed by Cloudinary (already in pom.xml; credentials now in `local-secrets.properties`, cloud name `igmsrg7x`)
+- [x] **Avatars public, documents private.** Avatars must work in a bare `<img src>`, which can't send an Authorization header. Resumes/cover letters are PII, so they're uploaded as Cloudinary `type=authenticated` and only reachable via a signed URL — a public object's URL *is* its credential, and it leaks through Referer headers, history and forwarded links, permanently, since files are never deleted
+- [x] Private files return an opaque `/api/files/{id}` rather than a URL; `GET` exchanges it for a 5-min signed `downloadUrl`. **Returns JSON rather than a 302 or a byte stream** because the client's Bearer token rides on axios, and a browser following a redirect or an `<a href>` would not send it
+- [x] Uses `cloudinary.privateDownload(...)` with an explicit `expires_at`, **not** `cloudinary.url().signed(true)` — the latter produces a signature that never expires, which for a PII document is barely better than public. (First draft had this bug: it computed an expiry and never used it)
+- [x] `FileTypeDetector` validates by **magic bytes**, not the client-declared Content-Type: `%PDF`, PNG header, JPEG, RIFF/WEBP, `PK\x03\x04` (docx/OOXML), OLE2 (legacy doc). Dependency-free rather than pulling in Tika, since the accepted set is small and fixed
+- [x] Per-purpose caps in `FilePurpose` (5 MB docs / 2 MB avatars) plus outer `spring.servlet.multipart` limits, with a `MaxUploadSizeExceededException` handler so an oversized upload is a 413 with a proper body instead of escaping to `/error`
+- [x] `StoredFile` uses a plain `userId` column, not `@ManyToOne` — the row *is* the ownership check at download time. Fresh UUID key per upload, never overwritten, so a job keeps resolving the resume that was current when it was created
+- [x] Original filename kept in the DB, **not** in the storage key — keeps user-supplied text out of the object path (encoding/traversal surface) at no cost, since it's returned on the exchange
+- [x] `parsePurpose` converts an unknown value to `InvalidFileException` rather than letting `valueOf`'s `IllegalArgumentException` escape to `/error` and return a bodyless 401 — the same trap as the enum-binding bug earlier
+- [x] Runtime-tested end-to-end: real PDF and PNG uploaded to Cloudinary; signed URL fetches the PDF (`%PDF` header verified); **unsigned public URL → 404 and unsigned authenticated URL → 401**, while the avatar's public URL → 200; `.txt` renamed `.pdf` → 400; PNG as resume → 400; bad purpose → 400; 7 MB → 413; no token → 401; another user's fileId → 404
+- [ ] Signed-URL *expiry* not directly observed (would need a 5-minute wait) — the `expires_at` parameter is present and Cloudinary enforces it
+- [ ] Nothing ever deletes Cloudinary objects. Deliberate (immutability), but means storage grows forever and orphans accumulate when a job is deleted
 
 ## JwtUtil — done
 - [x] @Value-injected secret + expiration (access: 15 min via jwt.expiration)
@@ -248,4 +293,5 @@ These are the remaining gaps in User read/update coverage. Deliberately parked �
 - `ddl-auto: update` also never updates an existing **MySQL ENUM column's** allowed-value list when the Java enum changes. Renaming/adding an enum constant needs a manual `ALTER TABLE ... MODIFY COLUMN x ENUM(...)`. Hit this fixing the `Priority.HiGH` → `HIGH` typo on 2026-08-09 (table was empty, so no data migration was needed — would have been much worse later).
 - Enum constant names are part of the public API — they're the literal strings sent over JSON. `RoundType` is PascalCase (`Technical`, `SystemDesign`) while `Status`/`Priority`/`Outcome` are UPPERCASE; easy to get wrong from the frontend.
 - Never return JPA entities from a controller. Returning `JobApplication` directly serializes its `user`, which recurses back into `user.jobApplications` and also exposes the password hash. Every endpoint maps to a `*ResponseDto` instead.
+- **`LocalDateTime` is stored shifted, and raw SQL against it is a trap.** The JDBC URL sets `serverTimezone=UTC`, so a `LocalDateTime` of `09:00` written from an IST machine lands in MySQL as `03:30`. It round-trips correctly through the API (write 09:00, read 09:00) and Hibernate converts both sides of a query consistently, so application code is fine. But hand-written SQL is not: `follow_up_date <= NOW()` compares a UTC column against a SYSTEM-zone `NOW()` and is off by the UTC offset — verified by a row 2 minutes in the *future* reporting as due. Use `UTC_TIMESTAMP()` in ad-hoc SQL, and expect DBeaver to display shifted times.
 - Ownership checks must be part of the **query**, not a post-fetch `if`. `findByJobIdAndUser_UserId(jobId, userId)` makes "not yours" and "doesn't exist" the same code path, which is what lets every miss return an indistinguishable 404.

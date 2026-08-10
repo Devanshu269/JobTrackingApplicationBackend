@@ -30,6 +30,13 @@ spring:
             client-secret: ${GITHUB_CLIENT_SECRET:placeholder}
             scope: user:email
 
+  servlet:
+    multipart:
+      # Outer guard only — the real per-purpose caps (5 MB docs / 2 MB avatars) are enforced in
+      # FilePurpose. This just stops the container buffering something enormous first.
+      max-file-size: 6MB
+      max-request-size: 8MB
+
   mail:
     host: smtp.gmail.com
     port: 587
@@ -56,6 +63,12 @@ app:
   password-reset:
     redirect-uri: ${PASSWORD_RESET_REDIRECT_URI:http://localhost:5173/reset-password}
     token-expiration-minutes: 30
+  reminders:
+    # Set REMINDERS_ENABLED=false to stop the scheduler sending real email in dev.
+    enabled: ${REMINDERS_ENABLED:true}
+    # 6-field Spring cron (sec min hour dom mon dow). Default: top of every hour.
+    cron: ${REMINDERS_CRON:0 0 * * * *}
+    batch-size: 50
 
 jwt:
   secret: ${JWT_SECRET:changeme}

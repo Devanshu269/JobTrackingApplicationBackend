@@ -11,6 +11,18 @@ public class EmailService {
 
     private final JavaMailSender mailSender;
 
+    public void sendFollowUpReminder(String to, String companyName, String jobRole, String statusLabel) {
+        SimpleMailMessage message = new SimpleMailMessage();
+        message.setTo(to);
+        message.setSubject("Follow up on " + companyName);
+        message.setText("A follow-up you scheduled is due.\n\n"
+                + jobRole + " at " + companyName + "\n"
+                + "Current status: " + statusLabel + "\n\n"
+                + "Open JobTracker to update the application or reschedule the follow-up.\n\n"
+                + "You're getting this because reminders are switched on for this application.");
+        mailSender.send(message);
+    }
+
     public void sendPasswordResetEmail(String to, String resetLink) {
         SimpleMailMessage message = new SimpleMailMessage();
         message.setTo(to);

@@ -9,6 +9,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import tools.jackson.databind.exc.InvalidFormatException;
 
 import java.time.LocalDateTime;
@@ -72,6 +73,31 @@ public class GlobalExceptionHandler {
         error.setStatus(HttpStatus.UNAUTHORIZED.value());
         error.setMessage(ex.getMessage());
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error);
+    }
+
+    @ExceptionHandler(InvalidFileException.class)
+    public ResponseEntity<ErrorResponseDto> handleInvalidFileException(InvalidFileException ex) {
+        ErrorResponseDto error = new ErrorResponseDto();
+        error.setTimestamp(LocalDateTime.now());
+        error.setStatus(HttpStatus.BAD_REQUEST.value());
+        error.setMessage(ex.getMessage());
+        error.setErrors(Map.of("file", ex.getMessage()));
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
+     * Thrown by the servlet container before any controller code runs when the upload exceeds
+     * spring.servlet.multipart limits. Without this it escapes to /error and comes back as a
+     * bodyless 401, same trap as the enum-binding failures above.
+     */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ErrorResponseDto> handleMaxUploadSize(MaxUploadSizeExceededException ex) {
+        ErrorResponseDto error = new ErrorResponseDto();
+        error.setTimestamp(LocalDateTime.now());
+        error.setStatus(HttpStatus.PAYLOAD_TOO_LARGE.value());
+        error.setMessage("File is too large");
+        error.setErrors(Map.of("file", "File exceeds the maximum upload size"));
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).body(error);
     }
 
     @ExceptionHandler(ResourceNotFoundException.class)

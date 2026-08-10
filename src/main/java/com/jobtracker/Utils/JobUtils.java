@@ -32,6 +32,12 @@ public class JobUtils {
         job.setCoverLetterUrl(dto.getCoverLetterUrl());
         job.setNotes(dto.getNotes());
         job.setAppliedDate(dto.getAppliedDate());
+        // Compare BEFORE overwriting: if the follow-up moved, clear the sent-marker so the
+        // reminder re-arms. Without this a rescheduled follow-up would never fire again,
+        // because reminderSentAt still holds the send from the *previous* date.
+        if (!java.util.Objects.equals(job.getFollowUpDate(), dto.getFollowUpDate())) {
+            job.setReminderSentAt(null);
+        }
         job.setFollowUpDate(dto.getFollowUpDate());
         // reminderEnabled is NOT NULL in the DB; default it rather than letting a null through
         job.setReminderEnabled(dto.getReminderEnabled() != null ? dto.getReminderEnabled() : Boolean.FALSE);
@@ -57,6 +63,7 @@ public class JobUtils {
         dto.setAppliedDate(job.getAppliedDate());
         dto.setFollowUpDate(job.getFollowUpDate());
         dto.setReminderEnabled(job.getReminderEnabled());
+        dto.setReminderSentAt(job.getReminderSentAt());
         dto.setCreatedAt(job.getCreatedAt());
         dto.setUpdatedAt(job.getUpdatedAt());
         return dto;

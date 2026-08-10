@@ -29,6 +29,7 @@ public class JobApplicationService {
 
     private final JobApplicationRepository jobApplicationRepository;
     private final JobUtils jobUtils;
+    private final ActivityService activityService;
 
     public List<JobApplicationResponseDto> listJobs(User user, Status status, Priority priority, JobType jobType, String search) {
         Specification<JobApplication> spec = buildSpec(user.getUserId(), status, priority, jobType, search);
@@ -42,22 +43,35 @@ public class JobApplicationService {
         return jobUtils.toJobResponseDto(findOwnedJob(user, jobId));
     }
 
+    @Transactional
     public JobApplicationResponseDto createJob(User user, JobApplicationRequestDto dto) {
         JobApplication job = new JobApplication();
         job.setUser(user);
         jobUtils.applyToEntity(dto, job);
-        return jobUtils.toJobResponseDto(jobApplicationRepository.save(job));
+        JobApplication saved = jobApplicationRepository.save(job);
+        // After save, so the activity row gets a real jobId rather than null.
+        activityService.recordJobCreated(user, saved);
+        return jobUtils.toJobResponseDto(saved);
     }
 
+    @Transactional
     public JobApplicationResponseDto updateJob(User user, Integer jobId, JobApplicationRequestDto dto) {
         JobApplication job = findOwnedJob(user, jobId);
+        // Must be read BEFORE applyToEntity: that call mutates the managed entity in place, so
+        // reading the status afterwards returns the new value and every change logs "X -> X".
+        Status previousStatus = job.getStatus();
         jobUtils.applyToEntity(dto, job);
-        return jobUtils.toJobResponseDto(jobApplicationRepository.save(job));
+        JobApplication saved = jobApplicationRepository.save(job);
+        activityService.recordJobUpdated(user, saved, previousStatus);
+        return jobUtils.toJobResponseDto(saved);
     }
 
     @Transactional
     public void deleteJob(User user, Integer jobId) {
-        jobApplicationRepository.delete(findOwnedJob(user, jobId));
+        JobApplication job = findOwnedJob(user, jobId);
+        // Logged before the delete, while companyName/jobRole are still readable to snapshot.
+        activityService.recordJobDeleted(user, job);
+        jobApplicationRepository.delete(job);
     }
 
     public JobStatsResponseDto getStats(User user) {

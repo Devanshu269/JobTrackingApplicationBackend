@@ -30,6 +30,8 @@ public class JobApplicationResponseDto {
     private LocalDateTime appliedDate;
     private LocalDateTime followUpDate;
     private Boolean reminderEnabled;
+    /** Null means the follow-up reminder hasn't gone out yet — lets the UI tell pending from sent. */
+    private LocalDateTime reminderSentAt;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

@@ -23,6 +23,7 @@ public class InterviewRoundService {
     private final InterviewRoundRepository interviewRoundRepository;
     private final JobApplicationService jobApplicationService;
     private final JobUtils jobUtils;
+    private final ActivityService activityService;
 
     public List<InterviewRoundResponseDto> listRounds(User user, Integer jobId) {
         // Reuses the job ownership check — if the caller doesn't own the job, this 404s
@@ -50,19 +51,25 @@ public class InterviewRoundService {
         return jobUtils.toRoundResponseDto(findRound(jobId, roundId));
     }
 
+    @Transactional
     public InterviewRoundResponseDto createRound(User user, Integer jobId, InterviewRoundRequestDto dto) {
         JobApplication job = jobApplicationService.findOwnedJob(user, jobId);
         InterviewRound round = new InterviewRound();
         round.setJobApplication(job);
         jobUtils.applyToEntity(dto, round);
-        return jobUtils.toRoundResponseDto(interviewRoundRepository.save(round));
+        InterviewRound saved = interviewRoundRepository.save(round);
+        activityService.recordRoundScheduled(user, job);
+        return jobUtils.toRoundResponseDto(saved);
     }
 
+    @Transactional
     public InterviewRoundResponseDto updateRound(User user, Integer jobId, Integer roundId, InterviewRoundRequestDto dto) {
-        jobApplicationService.findOwnedJob(user, jobId);
+        JobApplication job = jobApplicationService.findOwnedJob(user, jobId);
         InterviewRound round = findRound(jobId, roundId);
         jobUtils.applyToEntity(dto, round);
-        return jobUtils.toRoundResponseDto(interviewRoundRepository.save(round));
+        InterviewRound saved = interviewRoundRepository.save(round);
+        activityService.recordRoundScheduled(user, job);
+        return jobUtils.toRoundResponseDto(saved);
     }
 
     @Transactional
