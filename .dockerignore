@@ -1,0 +1,17 @@
+# Secrets must never enter the build context, let alone the image. Both files are gitignored,
+# but Docker does not read .gitignore — without this, `COPY . .` bakes real credentials into
+# an image layer where they survive even if a later layer deletes the file.
+local-secrets.properties
+prod-secrets.properties
+
+# Build output — rebuilt inside the image; copying it in risks shipping a stale jar.
+target/
+
+.git/
+.gitignore
+.idea/
+*.iml
+.mvn/wrapper/maven-wrapper.jar
+
+*.md
+design-preview/

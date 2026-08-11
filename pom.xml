@@ -54,6 +54,16 @@
 			<artifactId>spring-boot-starter-oauth2-client</artifactId>
 		</dependency>
 
+		<!-- Actuator: exposes /actuator/health so the platform has a real health signal
+		     (including database connectivity) rather than just "the port is open".
+		     Deliberately the STARTER, not bare spring-boot-actuator — Spring Boot 4 splits
+		     autoconfiguration into per-technology modules, so the bare jar would sit on the
+		     classpath doing nothing, exactly as flyway-core did. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator</artifactId>
+		</dependency>
+
 		<!-- MySQL -->
 		<dependency>
 			<groupId>com.mysql</groupId>

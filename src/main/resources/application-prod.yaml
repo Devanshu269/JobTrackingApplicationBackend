@@ -23,16 +23,28 @@
 
 spring:
   datasource:
-    # Railway exposes the connection string; no createDatabaseIfNotExist, and SSL stays on.
+    # Aiven MySQL. Three things differ from a local/Railway database:
+    #   * TLS is mandatory — the connection is refused without it, so the URL needs
+    #     sslMode=REQUIRED (see DEPLOYMENT.md for the exact JDBC URL to build).
+    #   * The port is service-specific, not 3306.
+    #   * The default database is `defaultdb`, not `jobtracking`.
+    # No createDatabaseIfNotExist: Aiven provisions the database, and the app should never
+    # be creating schemas in production.
     url: ${DATABASE_URL}
     username: ${DATABASE_USERNAME}
     password: ${DATABASE_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
-      # Railway's MySQL plans cap connections; the default pool of 10 per instance can exhaust
-      # them once you run more than one instance alongside a migration or a console session.
-      maximum-pool-size: ${DB_POOL_SIZE:8}
+      # Aiven's smaller plans cap total connections tightly (the free tier is ~20 across
+      # everything, including your own DBeaver session and any migration run). Hibernate's
+      # default pool of 10 per instance can exhaust that on its own, which surfaces as
+      # intermittent "too many connections" rather than a clean failure.
+      maximum-pool-size: ${DB_POOL_SIZE:5}
       connection-timeout: 20000
+      # Aiven closes idle server-side connections; retiring them locally first avoids handing
+      # the application a socket the server has already dropped.
+      max-lifetime: 240000
+      idle-timeout: 120000
 
   flyway:
     enabled: true
@@ -72,18 +84,18 @@ spring:
             client-secret: ${GITHUB_CLIENT_SECRET}
 
 server:
-  # Railway (and most PaaS) inject the port to bind. Ignoring it means the platform's health
+  # Render injects PORT and requires the app to bind it. Ignoring it means Render's health
   # check hits a closed port and the deploy is marked failed.
   port: ${PORT:8080}
   servlet:
     context-path: /jobTracking
 
-  # REQUIRED behind Railway's TLS-terminating proxy.
+  # REQUIRED behind Render's TLS-terminating proxy.
   #
-  # Spring builds the OAuth2 redirect_uri from the incoming request. The proxy forwards over
-  # plain HTTP, so without honouring X-Forwarded-Proto Spring generates `http://…/login/oauth2/
-  # code/google`, which will not match the `https://` URI registered with Google — OAuth2 login
-  # fails in production while working perfectly locally.
+  # Spring builds the OAuth2 redirect_uri from the incoming request. Render terminates TLS and
+  # forwards over plain HTTP, so without honouring X-Forwarded-Proto Spring generates
+  # `http://…/login/oauth2/code/google`, which will not match the `https://` URI registered with
+  # Google — OAuth2 login fails in production while working perfectly locally.
   forward-headers-strategy: framework
 
   error:
@@ -116,6 +128,11 @@ app:
     enabled: ${REMINDERS_ENABLED:true}
     # Backfill guard matters most on the very first production run: without it, every follow-up
     # that has ever come due would be emailed at once.
+    #
+    # ⚠️ On Render's FREE tier the service sleeps after ~15 minutes of inactivity, and a sleeping
+    # process runs no @Scheduled jobs. Reminders then fire only when the app happens to be awake
+    # for other reasons, so a follow-up can silently pass its window entirely. Raising this value
+    # widens the catch-up window; see DEPLOYMENT.md for the real fixes.
     max-overdue-days: ${REMINDERS_MAX_OVERDUE_DAYS:7}
   cleanup:
     enabled: ${CLEANUP_ENABLED:true}

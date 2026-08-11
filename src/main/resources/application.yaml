@@ -60,6 +60,19 @@ spring:
           starttls:
             enable: true
 
+management:
+  endpoints:
+    web:
+      exposure:
+        # ONLY health. The default exposure includes endpoints like `env` and `beans`, which
+        # would hand configuration values and internal wiring to anyone who can reach the port.
+        include: health
+  endpoint:
+    health:
+      # "UP"/"DOWN" and nothing else. The detailed view names the database, its vendor and
+      # validation state — more than an unauthenticated prober has any need for.
+      show-details: never
+
 server:
   port: 8080
   servlet:

@@ -34,3 +34,7 @@ build/
 
 ### Secrets ###
 local-secrets.properties
+
+# Production secrets — reference only, for pasting into Render's environment variables.
+# Never committed; the deployed app reads env vars, not this file.
+prod-secrets.properties

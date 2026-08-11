@@ -40,6 +40,11 @@ public class SecurityConfig {
                         .requestMatchers("/api/notifications/**").authenticated()
                         .requestMatchers("/api/files/**").authenticated()
                         .requestMatchers("/api/users/**").authenticated()
+                        // Health check only, and unauthenticated on purpose: the platform probes
+                        // this before any token exists, and Render treats a non-2xx as unhealthy —
+                        // requiring auth here would restart the service in a loop. Only /health is
+                        // exposed at all (see management.endpoints in application.yaml).
+                        .requestMatchers("/actuator/health").permitAll()
                         .requestMatchers("/oauth2/**", "/login/oauth2/**").permitAll()
                         .anyRequest().authenticated())
                 .build();
