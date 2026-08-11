@@ -10,6 +10,22 @@
 -- which is what production still needs to apply.
 --
 
+--
+-- Foreign key checks are disabled for the duration of this script.
+--
+-- mysqldump emits CREATE TABLE statements in ALPHABETICAL order, so interview_rounds (which
+-- references job_applications) is created before it, and job_applications references users,
+-- which comes last. Running this against an empty database therefore fails with
+-- "Error 1824: Failed to open the referenced table".
+--
+-- mysqldump normally guards against this itself, but the header carrying SET FOREIGN_KEY_CHECKS=0
+-- was stripped by the --compact --skip-comments flags used to generate this file.
+--
+-- The setting is session-scoped and Flyway runs each migration on a single connection, so it
+-- applies to this script alone and cannot leak into the application's own connections.
+--
+SET FOREIGN_KEY_CHECKS = 0;
+
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
 CREATE TABLE `activity_log` (
@@ -154,3 +170,5 @@ CREATE TABLE `users` (
   UNIQUE KEY `UK6dotkott2kjsp8vw4d0m25fb7` (`email`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
+
+SET FOREIGN_KEY_CHECKS = 1;
