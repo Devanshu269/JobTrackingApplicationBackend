@@ -1,0 +1,139 @@
+  # Production profile. Activate with SPRING_PROFILES_ACTIVE=prod
+#
+# Only overrides what must differ from application.yaml — everything not repeated here
+# (JWT lifetimes, multipart caps, reminder/cleanup schedules, OAuth2 scopes) is inherited.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────
+# EVERY SECRET HERE IS DELIBERATELY WITHOUT A DEFAULT.
+#
+# application.yaml gives JWT_SECRET a hardcoded placeholder default so local dev starts without
+# a secrets file.
+# That fallback is actively dangerous in production: a missing env var would boot the app with
+# a publicly-known signing key and anyone could forge a token for any account. Written as
+# `${JWT_SECRET}` instead, a missing variable fails the application at startup — loudly, before
+# it serves a single request. A crash you notice beats an app quietly running insecure.
+# ─────────────────────────────────────────────────────────────────────────────────────
+
+# No local-secrets.properties in production — everything arrives as environment variables. The
+# `optional:` import in application.yaml stays harmless; the file simply won't exist there.
+#
+# Note there is deliberately no `spring.config.activate.on-profile` block: this file is already
+# profile-specific by filename, and adding activation inside it is redundant (and something
+# Spring's own documentation advises against).
+
+spring:
+  datasource:
+    # Railway exposes the connection string; no createDatabaseIfNotExist, and SSL stays on.
+    url: ${DATABASE_URL}
+    username: ${DATABASE_USERNAME}
+    password: ${DATABASE_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      # Railway's MySQL plans cap connections; the default pool of 10 per instance can exhaust
+      # them once you run more than one instance alongside a migration or a console session.
+      maximum-pool-size: ${DB_POOL_SIZE:8}
+      connection-timeout: 20000
+
+  flyway:
+    enabled: true
+    # The production database predates Flyway, same as local did — stamp it at V1 rather than
+    # trying to run the baseline against an already-populated schema.
+    # SAFE TO LEAVE ON permanently: it only acts when the history table is absent.
+    baseline-on-migrate: true
+    baseline-version: 1
+
+  jpa:
+    hibernate:
+      # Flyway owns the schema. Startup fails on any entity/schema mismatch instead of the app
+      # silently altering production data.
+      ddl-auto: validate
+    # OFF in production. Both of these log every statement — that is noise at best, and at worst
+    # writes parameter values (emails, tokens) into logs that are retained and searchable.
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: false
+
+  mail:
+    host: smtp.gmail.com
+    port: 587
+    username: ${GMAIL_USER}
+    password: ${GMAIL_APP_PASSWORD}
+
+  security:
+    oauth2:
+      client:
+        registration:
+          google:
+            client-id: ${GOOGLE_CLIENT_ID}
+            client-secret: ${GOOGLE_CLIENT_SECRET}
+          github:
+            client-id: ${GITHUB_CLIENT_ID}
+            client-secret: ${GITHUB_CLIENT_SECRET}
+
+server:
+  # Railway (and most PaaS) inject the port to bind. Ignoring it means the platform's health
+  # check hits a closed port and the deploy is marked failed.
+  port: ${PORT:8080}
+  servlet:
+    context-path: /jobTracking
+
+  # REQUIRED behind Railway's TLS-terminating proxy.
+  #
+  # Spring builds the OAuth2 redirect_uri from the incoming request. The proxy forwards over
+  # plain HTTP, so without honouring X-Forwarded-Proto Spring generates `http://…/login/oauth2/
+  # code/google`, which will not match the `https://` URI registered with Google — OAuth2 login
+  # fails in production while working perfectly locally.
+  forward-headers-strategy: framework
+
+  error:
+    # Never leak internals to clients. GlobalExceptionHandler already returns deliberate,
+    # readable messages for every expected failure; anything reaching Spring's default handler
+    # is unexpected and its details belong in the logs, not the response body.
+    include-stacktrace: never
+    include-message: never
+    include-binding-errors: never
+
+cors:
+  # Deployed frontend origin. Scheme included, NO trailing slash and no path — the browser sends
+  # only scheme+host, so anything else simply never matches. This is the most common cause of
+  # "works locally, CORS error in production".
+  #
+  # Comma-separated for multiple origins. Vercel preview deployments each get their own hostname,
+  # so add them here (or override the env var) if you need previews to reach this API.
+  allowed-origin: ${CORS_ALLOWED_ORIGIN:https://job-tracking-application-frontend.vercel.app}
+
+app:
+  oauth2:
+    # Where the backend sends the browser once OAuth2 completes, carrying ?code=…
+    # Verified against the frontend router: /oauth2/redirect sits at the ROOT, not under
+    # /JobJuggler (only the authenticated shell lives there).
+    redirect-uri: ${OAUTH2_REDIRECT_URI:https://job-tracking-application-frontend.vercel.app/oauth2/redirect}
+  password-reset:
+    # Goes into emails real users click, so it must be the public frontend URL. Also a root route.
+    redirect-uri: ${PASSWORD_RESET_REDIRECT_URI:https://job-tracking-application-frontend.vercel.app/reset-password}
+  reminders:
+    enabled: ${REMINDERS_ENABLED:true}
+    # Backfill guard matters most on the very first production run: without it, every follow-up
+    # that has ever come due would be emailed at once.
+    max-overdue-days: ${REMINDERS_MAX_OVERDUE_DAYS:7}
+  cleanup:
+    enabled: ${CLEANUP_ENABLED:true}
+
+jwt:
+  # MUST be different from the development secret, and long/random.
+  # Generate with:  openssl rand -base64 48
+  secret: ${JWT_SECRET}
+
+cloudinary:
+  cloud-name: ${CLOUDINARY_CLOUD_NAME}
+  api-key: ${CLOUDINARY_API_KEY}
+  api-secret: ${CLOUDINARY_API_SECRET}
+
+logging:
+  level:
+    root: INFO
+    com.jobtracker: INFO
+    # Security DEBUG logs authentication details and is only ever a temporary diagnostic.
+    org.springframework.security: WARN
+    org.hibernate.SQL: WARN

@@ -136,6 +136,15 @@ Reminders honour each user's `emailNotifications` flag and skip follow-ups older
 
 ---
 
+## Deploying
+
+See **[DEPLOYMENT.md](DEPLOYMENT.md)** — env vars, OAuth2 callback registration, first-deploy
+Flyway expectations, smoke tests and rollback.
+
+Production config lives in `application-prod.yaml`, activated with `SPRING_PROFILES_ACTIVE=prod`.
+Every secret there is declared **without a fallback**, so a missing variable fails startup rather
+than booting with a placeholder signing key.
+
 ## Testing
 
 There is **no automated test suite**. Everything has been verified manually against a running
