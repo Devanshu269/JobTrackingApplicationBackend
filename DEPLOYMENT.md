@@ -39,8 +39,39 @@ are not obvious and are specific to this app:
 | Option | Effect |
 |---|---|
 | **Render paid instance** (always on) | Everything works as designed. The straightforward fix. |
-| **Free + external pinger** (cron-job.org etc. hitting the API every 10 min) | Keeps it awake, so schedulers mostly run and cold starts mostly disappear. A workaround, not a guarantee — and it burns free-tier hours. |
-| **Free, accept it** | Reminders become unreliable and cleanup rarely runs. Fine for a demo, not for real users relying on reminder email. Set `REMINDERS_ENABLED=false` rather than shipping a half-working feature. |
+| **Free + external pinger** | Keeps it awake, so schedulers run and cold starts disappear. Setup below. |
+| **Free, accept it** | Reminders become unreliable and cleanup rarely runs. Set `REMINDERS_ENABLED=false` rather than shipping a half-working feature. |
+
+### Keeping a free instance awake (external pinger)
+
+**This is configured outside the repo** — nothing in the codebase can prevent the sleep, because
+Render's idle timer responds to *inbound* traffic. A self-ping from inside the app does not solve
+it either: once the service is asleep its scheduler is asleep too, so it can never wake itself.
+The ping has to come from somewhere else.
+
+Use any free uptime monitor — [UptimeRobot](https://uptimerobot.com) or
+[cron-job.org](https://cron-job.org):
+
+| Setting | Value |
+|---|---|
+| URL | `https://jobtrackingapplicationbackend.onrender.com/jobTracking/actuator/health` |
+| Method | `GET` |
+| Interval | **every 10 minutes** (must be under Render's ~15 min idle window) |
+| Expected status | `200` |
+
+`/actuator/health` is the right target: it needs no authentication, returns in milliseconds, and
+its `200`/`503` doubles as genuine uptime monitoring — you get alerted if the database connection
+drops, not just if the process died.
+
+> Requires the mail health indicator to stay disabled (`management.health.mail.enabled: false`).
+> With it on, this endpoint hangs on Render's blocked SMTP port and every ping times out.
+
+**Two caveats, worth knowing before relying on it:**
+
+- **Free tier includes 750 instance-hours/month and a month is ~730 hours.** One always-awake
+  service just fits, with no room for a second on the same account.
+- It keeps the service warm; it does not make it resilient. A crash or a deploy still causes a
+  cold start, and the pinger only shortens how long that lasts.
 
 Decide this before step 1 — it determines whether the reminder feature should be enabled at all.
 
@@ -150,7 +181,7 @@ no build or start commands to configure — the Dockerfile owns both.
 |---|---|
 | Runtime / Environment | **Docker** |
 | Build & start commands | leave blank — the Dockerfile defines them |
-| Health check path | `/jobTracking/actuator/health` |
+| Health check path | `/jobTracking/actuator/health/liveness` |
 | Instances | **1** (see Known constraints) |
 
 > If the service was created before the Dockerfile existed, the first build fails with
@@ -172,8 +203,20 @@ layer, where they persist even if a later layer deletes the file.
 `-DskipTests` is honest today only because there is no test suite; remove it from the Dockerfile
 the moment one exists.
 
-> **Note the `/jobTracking` prefix on the health path** — the context path applies to actuator too.
-> `/actuator/health` without it returns 404 and every check fails.
+> **Use `/health/liveness`, not `/health`.** The aggregate `/actuator/health` endpoint hangs on
+> Render — cause not established; it is not the database (connections are idle and healthy) and
+> disabling the mail indicator did not fix it. `liveness` reports only whether the process is
+> running, checks no external dependency, and responds in milliseconds, which is exactly what a
+> platform health check should ask.
+>
+> The trade: you lose the database-connectivity signal from the platform probe. If you want that
+> back, the external uptime pinger can watch a richer endpoint and alert separately.
+>
+> To diagnose the aggregate endpoint later, set `HEALTH_SHOW_DETAILS=always` in Render and call
+> `/actuator/health` — it will name the failing component. Set it back to `never` afterwards.
+>
+> **Note the `/jobTracking` prefix** — the context path applies to actuator too. Without it the
+> path 404s and every check fails.
 >
 > `/actuator/health` is the only actuator endpoint exposed and the only one permitted
 > unauthenticated; `env`, `beans`, `mappings`, `heapdump` and the rest all return 401. It must be
@@ -260,6 +303,12 @@ Moving the exchange store to the database is a small change and the precondition
 
 Everything has been verified manually against a running server and real MySQL. There is no test
 suite to catch a regression before deploy — review diffs accordingly.
+
+### Free-tier sleep breaks scheduled jobs
+
+Covered in step 0. In short: a sleeping process runs no `@Scheduled` work, so reminders and token
+cleanup only fire when the app happens to be awake. The external pinger above is what makes them
+dependable on the free tier.
 
 ### First reminder run
 

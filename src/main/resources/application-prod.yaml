@@ -98,6 +98,16 @@ server:
   # Google — OAuth2 login fails in production while working perfectly locally.
   forward-headers-strategy: framework
 
+  tomcat:
+    threads:
+      # Default is 200 worker threads, each with its own stack — far beyond what this traffic
+      # needs and a meaningful chunk of a 512 MB container. 20 is ample here and can be raised
+      # if requests ever start queueing.
+      max: 20
+      min-spare: 2
+    max-connections: 200
+    accept-count: 50
+
   error:
     # Never leak internals to clients. GlobalExceptionHandler already returns deliberate,
     # readable messages for every expected failure; anything reaching Spring's default handler
@@ -146,6 +156,15 @@ cloudinary:
   cloud-name: ${CLOUDINARY_CLOUD_NAME}
   api-key: ${CLOUDINARY_API_KEY}
   api-secret: ${CLOUDINARY_API_SECRET}
+
+management:
+  health:
+    mail:
+      # OFF. Render blocks outbound SMTP, so this indicator hangs on a connection that never
+      # completes — taking /actuator/health with it and making the platform's probe time out.
+      # Health should answer "can this app serve requests", and Gmail being unreachable does not
+      # change that answer. Confirmed live: forgot-password times out after 45s on Render.
+      enabled: false
 
 logging:
   level:

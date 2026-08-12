@@ -71,7 +71,16 @@ management:
     health:
       # "UP"/"DOWN" and nothing else. The detailed view names the database, its vendor and
       # validation state — more than an unauthenticated prober has any need for.
-      show-details: never
+      #
+      # Switchable purely as a diagnostic: set HEALTH_SHOW_DETAILS=always in the environment to
+      # find out WHICH component is failing, then set it back. The aggregate /actuator/health
+      # endpoint hangs on Render for reasons not yet established, and this is how to find out.
+      show-details: ${HEALTH_SHOW_DETAILS:never}
+      # Expose the liveness/readiness groups separately. The platform health check uses
+      # /health/liveness, which reports only that the process is running and touches no external
+      # dependency — so a slow or unreachable dependency cannot trigger a restart loop.
+      probes:
+        enabled: true
 
 server:
   port: 8080
