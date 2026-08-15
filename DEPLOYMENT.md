@@ -430,14 +430,14 @@ Symptom: nothing responds at all — not the API, not `/actuator/health/liveness
 logs show the same stack trace repeating, ending in:
 
 ```
-java.net.UnknownHostException: jobtracking-jobjuggler.h.aivencloud.com: Name or service not known
+java.net.UnknownHostException: mysql-xxxx.aivencloud.com: Name or service not known
 ```
 
 **This is DNS, not the database refusing the connection.** Aiven withdraws the hostname's DNS
 record when a service is powered off or deleted. Confirm from anywhere:
 
 ```bash
-dig +short jobtracking-jobjuggler.h.aivencloud.com   # empty  -> service is off/gone
+dig +short mysql-xxxx.aivencloud.com   # empty  -> service is off/gone
 dig +short aivencloud.com                            # answers -> Aiven's DNS is fine
 ```
 
