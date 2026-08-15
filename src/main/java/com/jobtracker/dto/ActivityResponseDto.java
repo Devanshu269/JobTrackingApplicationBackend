@@ -7,11 +7,6 @@ import lombok.Setter;
 
 import java.time.LocalDateTime;
 
-/**
- * Field names match the event shape the frontend's buildActivityFeed() already produces
- * ({@code id, action, jobId, companyName, jobRole, status, timestamp}), plus
- * {@code previousStatus} which the derived feed could never supply.
- */
 @Getter
 @Setter
 public class ActivityResponseDto {

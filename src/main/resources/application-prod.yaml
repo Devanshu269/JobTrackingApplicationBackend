@@ -1,66 +1,23 @@
-  # Production profile. Activate with SPRING_PROFILES_ACTIVE=prod
-#
-# Only overrides what must differ from application.yaml — everything not repeated here
-# (JWT lifetimes, multipart caps, reminder/cleanup schedules, OAuth2 scopes) is inherited.
-#
-# ─────────────────────────────────────────────────────────────────────────────────────
-# EVERY SECRET HERE IS DELIBERATELY WITHOUT A DEFAULT.
-#
-# application.yaml gives JWT_SECRET a hardcoded placeholder default so local dev starts without
-# a secrets file.
-# That fallback is actively dangerous in production: a missing env var would boot the app with
-# a publicly-known signing key and anyone could forge a token for any account. Written as
-# `${JWT_SECRET}` instead, a missing variable fails the application at startup — loudly, before
-# it serves a single request. A crash you notice beats an app quietly running insecure.
-# ─────────────────────────────────────────────────────────────────────────────────────
-
-# No local-secrets.properties in production — everything arrives as environment variables. The
-# `optional:` import in application.yaml stays harmless; the file simply won't exist there.
-#
-# Note there is deliberately no `spring.config.activate.on-profile` block: this file is already
-# profile-specific by filename, and adding activation inside it is redundant (and something
-# Spring's own documentation advises against).
-
 spring:
   datasource:
-    # Aiven MySQL. Three things differ from a local/Railway database:
-    #   * TLS is mandatory — the connection is refused without it, so the URL needs
-    #     sslMode=REQUIRED (see DEPLOYMENT.md for the exact JDBC URL to build).
-    #   * The port is service-specific, not 3306.
-    #   * The default database is `defaultdb`, not `jobtracking`.
-    # No createDatabaseIfNotExist: Aiven provisions the database, and the app should never
-    # be creating schemas in production.
     url: ${DATABASE_URL}
     username: ${DATABASE_USERNAME}
     password: ${DATABASE_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
-      # Aiven's smaller plans cap total connections tightly (the free tier is ~20 across
-      # everything, including your own DBeaver session and any migration run). Hibernate's
-      # default pool of 10 per instance can exhaust that on its own, which surfaces as
-      # intermittent "too many connections" rather than a clean failure.
       maximum-pool-size: ${DB_POOL_SIZE:5}
       connection-timeout: 20000
-      # Aiven closes idle server-side connections; retiring them locally first avoids handing
-      # the application a socket the server has already dropped.
       max-lifetime: 240000
       idle-timeout: 120000
 
   flyway:
     enabled: true
-    # The production database predates Flyway, same as local did — stamp it at V1 rather than
-    # trying to run the baseline against an already-populated schema.
-    # SAFE TO LEAVE ON permanently: it only acts when the history table is absent.
     baseline-on-migrate: true
     baseline-version: 1
 
   jpa:
     hibernate:
-      # Flyway owns the schema. Startup fails on any entity/schema mismatch instead of the app
-      # silently altering production data.
       ddl-auto: validate
-    # OFF in production. Both of these log every statement — that is noise at best, and at worst
-    # writes parameter values (emails, tokens) into logs that are retained and searchable.
     show-sql: false
     properties:
       hibernate:
@@ -78,55 +35,28 @@ spring:
             client-secret: ${GITHUB_CLIENT_SECRET}
 
 server:
-  # Render injects PORT and requires the app to bind it. Ignoring it means Render's health
-  # check hits a closed port and the deploy is marked failed.
   port: ${PORT:8080}
   servlet:
     context-path: /jobTracking
-
-  # REQUIRED behind Render's TLS-terminating proxy.
-  #
-  # Spring builds the OAuth2 redirect_uri from the incoming request. Render terminates TLS and
-  # forwards over plain HTTP, so without honouring X-Forwarded-Proto Spring generates
-  # `http://…/login/oauth2/code/google`, which will not match the `https://` URI registered with
-  # Google — OAuth2 login fails in production while working perfectly locally.
   forward-headers-strategy: framework
 
   tomcat:
     threads:
-      # Default is 200 worker threads, each with its own stack — far beyond what this traffic
-      # needs and a meaningful chunk of a 512 MB container. 20 is ample here and can be raised
-      # if requests ever start queueing.
       max: 20
       min-spare: 2
     max-connections: 200
     accept-count: 50
 
   error:
-    # Never leak internals to clients. GlobalExceptionHandler already returns deliberate,
-    # readable messages for every expected failure; anything reaching Spring's default handler
-    # is unexpected and its details belong in the logs, not the response body.
     include-stacktrace: never
     include-message: never
     include-binding-errors: never
 
 cors:
-  # Deployed frontend origin. Scheme included, NO trailing slash and no path — the browser sends
-  # only scheme+host, so anything else simply never matches. This is the most common cause of
-  # "works locally, CORS error in production".
-  #
-  # Comma-separated for multiple origins. Vercel preview deployments each get their own hostname,
-  # so add them here (or override the env var) if you need previews to reach this API.
   allowed-origin: ${CORS_ALLOWED_ORIGIN:https://job-tracking-application-frontend.vercel.app}
 
 app:
   email:
-    # Gmail's REST API over HTTPS. Two problems, one solution:
-    #   1. Render blocks outbound SMTP, so JavaMailSender hung ~45s and delivered nothing.
-    #   2. Gmail/Yahoo/Outlook now enforce DMARC, and no third-party relay can sign for
-    #      gmail.com — so Brevo-relayed mail from this From address is spam-filed by design.
-    # Sending through Google's own API is HTTPS (not blocked) and DMARC-aligned (not spam).
-    # Set EMAIL_PROVIDER=brevo to switch relays if a real domain is bought later.
     provider: ${EMAIL_PROVIDER:gmail}
     from-name: ${EMAIL_FROM_NAME:JobJuggler}
     from-address: ${EMAIL_FROM_ADDRESS:jobjugglerio@gmail.com}
@@ -134,36 +64,20 @@ app:
     brevo:
       api-key: ${BREVO_API_KEY:}
     gmail:
-      # Empty defaults, but GmailApiEmailSender refuses to start without them — a missing value
-      # stops the deploy with a named message instead of booting healthy and quietly discarding
-      # every password reset.
       client-id: ${GMAIL_OAUTH_CLIENT_ID:}
       client-secret: ${GMAIL_OAUTH_CLIENT_SECRET:}
       refresh-token: ${GMAIL_OAUTH_REFRESH_TOKEN:}
   oauth2:
-    # Where the backend sends the browser once OAuth2 completes, carrying ?code=…
-    # Verified against the frontend router: /oauth2/redirect sits at the ROOT, not under
-    # /JobJuggler (only the authenticated shell lives there).
     redirect-uri: ${OAUTH2_REDIRECT_URI:https://job-tracking-application-frontend.vercel.app/oauth2/redirect}
   password-reset:
-    # Goes into emails real users click, so it must be the public frontend URL. Also a root route.
     redirect-uri: ${PASSWORD_RESET_REDIRECT_URI:https://job-tracking-application-frontend.vercel.app/reset-password}
   reminders:
     enabled: ${REMINDERS_ENABLED:true}
-    # Backfill guard matters most on the very first production run: without it, every follow-up
-    # that has ever come due would be emailed at once.
-    #
-    # ⚠️ On Render's FREE tier the service sleeps after ~15 minutes of inactivity, and a sleeping
-    # process runs no @Scheduled jobs. Reminders then fire only when the app happens to be awake
-    # for other reasons, so a follow-up can silently pass its window entirely. Raising this value
-    # widens the catch-up window; see DEPLOYMENT.md for the real fixes.
     max-overdue-days: ${REMINDERS_MAX_OVERDUE_DAYS:7}
   cleanup:
     enabled: ${CLEANUP_ENABLED:true}
 
 jwt:
-  # MUST be different from the development secret, and long/random.
-  # Generate with:  openssl rand -base64 48
   secret: ${JWT_SECRET}
 
 cloudinary:
@@ -171,17 +85,9 @@ cloudinary:
   api-key: ${CLOUDINARY_API_KEY}
   api-secret: ${CLOUDINARY_API_SECRET}
 
-# The mail health indicator is gone with spring-boot-starter-mail, so there is no longer an
-# indicator to disable here. Worth watching: /actuator/health was returning 503 after 135s even
-# with management.health.mail.enabled=false set, which meant the flag was not taking effect or
-# mail was never the cause. Removing the starter settles it — if the aggregate endpoint answers
-# after this deploy, mail was the culprit; if it still hangs, mail is definitively ruled out.
-# The platform probe uses /actuator/health/liveness either way and is unaffected.
-
 logging:
   level:
     root: INFO
     com.jobtracker: INFO
-    # Security DEBUG logs authentication details and is only ever a temporary diagnostic.
     org.springframework.security: WARN
     org.hibernate.SQL: WARN

@@ -17,10 +17,6 @@ public class UserService {
     private final UserRepository userRepository;
     private final AuthUtils authUtils;
 
-    /**
-     * Partial update — only non-null fields are applied, so the frontend can send just the
-     * field it changed. (Matches the DTO, which deliberately has no @NotBlank on these.)
-     */
     public UserDto updateProfile(User user, UpdateProfileRequestDto dto) {
         if (dto.getFirstName() != null) {
             user.setUserFirstName(dto.getFirstName());
@@ -47,11 +43,6 @@ public class UserService {
         return authUtils.toUserDto(userRepository.save(user));
     }
 
-    /**
-     * Separate from the update above because UpdateDefaultResumeRequestDto has @NotBlank on
-     * resumeUrl — there's no way to send "clear it" through that endpoint without weakening
-     * the validation, so removal gets its own verb.
-     */
     public UserDto clearDefaultResume(User user) {
         user.setDefaultResumeUrl(null);
         return authUtils.toUserDto(userRepository.save(user));

@@ -14,10 +14,6 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
 import java.util.List;
 
-/**
- * Sends the follow-up reminder emails that {@code reminderEnabled}/{@code followUpDate} have
- * been collecting since those fields were added — nothing read them until now.
- */
 @Service
 @RequiredArgsConstructor
 public class ReminderService {
@@ -33,21 +29,9 @@ public class ReminderService {
     @Value("${app.reminders.batch-size:50}")
     private int batchSize;
 
-    /**
-     * How far back a due follow-up may be and still get emailed. Anything older is skipped
-     * permanently — see the backfill-guard note on findDueReminders.
-     */
     @Value("${app.reminders.max-overdue-days:7}")
     private int maxOverdueDays;
 
-    /**
-     * Deliberately <b>not</b> {@code @Transactional}.
-     *
-     * <p>Wrapping the loop in one transaction would mean a later failure rolls back the
-     * sent-markers for emails that have already physically left the server — and those can't be
-     * un-sent, so the next tick would deliver duplicates. Each {@code save} commits on its own
-     * instead, immediately after its email succeeds.
-     */
     @Scheduled(cron = "${app.reminders.cron:0 0 * * * *}")
     public void sendDueReminders() {
         if (!enabled) {

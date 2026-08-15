@@ -112,11 +112,6 @@ public class FileStorageService {
         return dto;
     }
 
-    /**
-     * Uses privateDownload rather than {@code cloudinary.url().signed(true)} — the latter produces
-     * a signed URL that never expires, which for a PII document is barely better than a public one.
-     * privateDownload takes an explicit {@code expires_at}, so a leaked link dies on its own.
-     */
     private String signedUrlFor(StoredFile stored) {
         long expiresAt = (System.currentTimeMillis() / 1000L) + SIGNED_URL_TTL_SECONDS;
         try {
@@ -131,7 +126,6 @@ public class FileStorageService {
         }
     }
 
-    /** Strips any path components a client might have smuggled into the filename. */
     private String sanitiseFilename(String original, String detectedType) {
         if (original == null || original.isBlank()) {
             return "upload." + detectedType;

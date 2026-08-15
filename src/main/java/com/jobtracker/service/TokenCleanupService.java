@@ -13,10 +13,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 
-/**
- * Deletes expired auth tokens. Both tables are append-only from the app's point of view —
- * nothing ever removed an expired row, so they grew without bound.
- */
 @Service
 @RequiredArgsConstructor
 public class TokenCleanupService {
@@ -33,12 +29,6 @@ public class TokenCleanupService {
     @Value("${app.cleanup.enabled:true}")
     private boolean enabled;
 
-    /**
-     * {@code @Transactional} is required, not decorative: both calls are derived {@code deleteBy}
-     * methods, which — unlike {@code save}/{@code findById} — get no automatic transaction and
-     * throw {@code TransactionRequiredException} without one. This has bitten twice already in
-     * this codebase, both times surfacing as a misleading empty 403.
-     */
     @Scheduled(cron = "${app.cleanup.cron:0 30 3 * * *}")
     @Transactional
     public void purgeExpiredTokens() {

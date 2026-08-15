@@ -52,15 +52,6 @@ public class JobApplicationController {
         return ResponseEntity.ok(jobApplicationService.listJobs(user, status, priority, jobType, search, page, size));
     }
 
-    /**
-     * Applications per day, oldest first, every day in the window present and zero-filled.
-     *
-     * <p>Exists so the weekly-trend chart survives pagination — it previously derived the same
-     * numbers client-side from the full jobs list, which would silently start computing over a
-     * single page.
-     *
-     * @param days window length, defaults to 7, clamped to 1..365
-     */
     @GetMapping("/trend")
     public ResponseEntity<List<TrendPointDto>> getTrend(Authentication authentication,
                                                         @RequestParam(required = false) Integer days) {

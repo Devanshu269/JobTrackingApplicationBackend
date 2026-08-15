@@ -12,16 +12,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
-import java.util.List;
 import java.util.Objects;
 
-/**
- * Writes the audit trail from the service layer rather than a JPA {@code @EntityListener}.
- *
- * <p>A listener fires on the already-mutated entity, so it cannot tell a status change from a
- * notes edit without snapshotting on {@code @PostLoad} or pulling in Envers. The callers here
- * know the <i>intent</i> of the operation, which is the thing worth recording.
- */
 @Service
 @RequiredArgsConstructor
 public class ActivityService {
@@ -44,11 +36,6 @@ public class ActivityService {
         save(user, job, ActivityAction.ROUND_SCHEDULED, job.getStatus(), null);
     }
 
-    /**
-     * @param previousStatus captured <b>before</b> the entity was mutated — see the call site in
-     *                       JobApplicationService.updateJob, where applyToEntity() overwrites the
-     *                       managed entity in place and reading afterwards yields the new value twice.
-     */
     public void recordJobUpdated(User user, JobApplication job, Status previousStatus) {
         Status current = job.getStatus();
         if (Objects.equals(previousStatus, current)) {
@@ -66,10 +53,6 @@ public class ActivityService {
         save(user, job, action, current, previousStatus);
     }
 
-    /**
-     * Paged, newest first. The table only ever grows, so {@code size} is capped rather than
-     * trusted — an unbounded read here is never valid.
-     */
     public PagedResponseDto<ActivityResponseDto> listRecent(User user, Integer page, Integer size) {
         // Math.clamp is Java 21; this project targets 17.
         int pageSize = size == null ? DEFAULT_LIMIT : Math.max(1, Math.min(size, MAX_LIMIT));

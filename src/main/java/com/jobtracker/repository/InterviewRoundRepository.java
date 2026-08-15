@@ -15,22 +15,8 @@ public interface InterviewRoundRepository extends JpaRepository<InterviewRound, 
 
     List<InterviewRound> findByJobApplication_JobIdOrderByRoundNumberAsc(Integer jobId);
 
-    /**
-     * Scoped to the parent job, so a round id from someone else's job can't be reached
-     * even if the caller owns *a* job. Ownership of the job itself is checked first.
-     */
     Optional<InterviewRound> findByJobRoundIdAndJobApplication_JobId(Integer jobRoundId, Integer jobId);
 
-    /**
-     * Every scheduled round across all of the caller's jobs, soonest first.
-     *
-     * Scoped by user id rather than job id — this is the one round query with no parent job to
-     * hang ownership off, so the WHERE clause carries it instead. Rounds with a null roundDate
-     * are excluded by the comparison: unscheduled rounds aren't "upcoming".
-     *
-     * JOIN FETCH pulls the parent job in the same statement so mapping company/role doesn't
-     * fire a lazy select per row.
-     */
     @Query("""
             SELECT r FROM InterviewRound r
             JOIN FETCH r.jobApplication j

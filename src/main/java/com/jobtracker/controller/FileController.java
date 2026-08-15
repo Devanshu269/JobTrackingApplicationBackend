@@ -25,10 +25,6 @@ public class FileController {
 
     private final FileStorageService fileStorageService;
 
-    /**
-     * @param purpose {@code resume} | {@code cover-letter} | {@code avatar}. Hyphens are accepted
-     *                and mapped to the enum, so the frontend's existing values work unchanged.
-     */
     @PostMapping
     public ResponseEntity<FileUploadResponseDto> upload(Authentication authentication,
                                                         @RequestParam("file") MultipartFile file,
@@ -38,11 +34,7 @@ public class FileController {
                 .body(fileStorageService.upload(user, file, parsePurpose(purpose)));
     }
 
-    /**
-     * Exchanges an opaque file id for a short-lived download URL. Returns JSON rather than
-     * redirecting or streaming bytes: the client has a Bearer token on its axios instance, but a
-     * browser following a redirect (or an {@code <a href>}) would not send it.
-     */
+
     @GetMapping("/{fileId}")
     public ResponseEntity<FileDownloadResponseDto> download(Authentication authentication,
                                                             @PathVariable Integer fileId) {
@@ -50,14 +42,7 @@ public class FileController {
         return ResponseEntity.ok(fileStorageService.getDownload(user, fileId));
     }
 
-    /**
-     * Hand-parsed rather than letting Spring bind straight to the enum, because the frontend
-     * sends {@code cover-letter} and the default converter is exact-match only.
-     *
-     * <p>A raw {@code valueOf} would throw IllegalArgumentException, which has no handler and so
-     * escapes to /error — behind the security filter chain — and comes back as a bodyless 401.
-     * Converting it to InvalidFileException keeps it a 400 with a readable message.
-     */
+
     private FilePurpose parsePurpose(String raw) {
         if (raw == null || raw.isBlank()) {
             throw new InvalidFileException("purpose is required — one of: resume, cover-letter, avatar");

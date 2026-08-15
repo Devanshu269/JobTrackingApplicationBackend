@@ -13,10 +13,6 @@ import org.springframework.stereotype.Component;
 @Component
 public class JobUtils {
 
-    /**
-     * Copies request fields onto the entity. Shared by create and update so the two can't
-     * drift apart when a new field is added.
-     */
     public void applyToEntity(JobApplicationRequestDto dto, JobApplication job) {
         job.setCompanyName(dto.getCompanyName());
         job.setJobRole(dto.getJobRole());
@@ -44,13 +40,6 @@ public class JobUtils {
         job.setReminderEnabled(dto.getReminderEnabled() != null ? dto.getReminderEnabled() : Boolean.FALSE);
     }
 
-    /**
-     * Applies only the fields actually supplied. Null is treated as "not supplied" — see the
-     * DTO's javadoc for why null cannot mean "clear" without JsonNullable or a raw Map.
-     *
-     * <p>Note {@code followUpDate} re-arms the reminder here exactly as it does on a full update:
-     * moving the date must clear {@code reminderSentAt} or the rescheduled follow-up never fires.
-     */
     public void applyPatchToEntity(JobApplicationPatchDto dto, JobApplication job) {
         if (dto.getCompanyName() != null) job.setCompanyName(dto.getCompanyName());
         if (dto.getJobRole() != null) job.setJobRole(dto.getJobRole());
@@ -125,7 +114,6 @@ public class JobUtils {
         return dto;
     }
 
-    /** Flattens a round together with its parent job's company/role for the cross-job view. */
     public UpcomingRoundResponseDto toUpcomingRoundDto(InterviewRound round) {
         JobApplication job = round.getJobApplication();
         UpcomingRoundResponseDto dto = new UpcomingRoundResponseDto();

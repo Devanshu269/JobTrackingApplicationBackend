@@ -35,10 +35,6 @@ public class InterviewRoundService {
                 .toList();
     }
 
-    /**
-     * Cross-job read, so there is no findOwnedJob call to lean on — the repository query is
-     * itself scoped by user id, which is what keeps another user's rounds out of the result.
-     */
     public List<UpcomingRoundResponseDto> listUpcomingRounds(User user) {
         return interviewRoundRepository.findUpcomingByUser(user.getUserId(), LocalDateTime.now())
                 .stream()

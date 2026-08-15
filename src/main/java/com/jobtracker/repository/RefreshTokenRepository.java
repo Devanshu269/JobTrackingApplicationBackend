@@ -20,14 +20,6 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Inte
     void deleteByUser(User user);
     long deleteByExpiresAtBefore(LocalDateTime time);
 
-    /**
-     * Kills an entire login session in one statement — used when a replayed token indicates the
-     * chain may be compromised, and when the absolute session cap is reached.
-     *
-     * <p>A bulk update rather than load-and-save: the caller doesn't need the entities, and this
-     * stays one statement regardless of how many rotations the session has been through.
-     * {@code @Modifying} requires the CALLER to be {@code @Transactional}.
-     */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("UPDATE RefreshToken r SET r.revoked = true WHERE r.familyId = :familyId AND r.revoked = false")
     int revokeFamily(@Param("familyId") String familyId);

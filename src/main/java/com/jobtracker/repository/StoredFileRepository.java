@@ -9,9 +9,5 @@ import java.util.Optional;
 @Repository
 public interface StoredFileRepository extends JpaRepository<StoredFile, Integer> {
 
-    /**
-     * Ownership-scoped, same pattern as findByJobIdAndUser_UserId: both conditions in one query
-     * so "not yours" and "doesn't exist" are indistinguishable and both 404.
-     */
     Optional<StoredFile> findByFileIdAndUserId(Integer fileId, Integer userId);
 }

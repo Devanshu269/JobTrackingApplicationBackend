@@ -54,16 +54,6 @@ public class JobApplicationService {
         return PagedResponseDto.from(jobApplicationRepository.findAll(spec, pageable), jobUtils::toJobResponseDto);
     }
 
-    /**
-     * Applications-per-day for the last {@code days} days, oldest first.
-     *
-     * <p>Exists specifically so the chart survives pagination: it used to be derived client-side
-     * from the full jobs list, which silently starts computing over a single page the moment
-     * {@code GET /api/jobs} is paged.
-     *
-     * <p>Every day in the window is present, zero-filled, so the chart can render a fixed number
-     * of bars without gap-filling.
-     */
     public List<TrendPointDto> getTrend(User user, Integer days) {
         int window = days == null ? 7 : Math.max(1, Math.min(days, 365));
         LocalDate today = LocalDate.now();
@@ -113,11 +103,6 @@ public class JobApplicationService {
         return jobUtils.toJobResponseDto(saved);
     }
 
-    /**
-     * Partial update. Same activity-logging behaviour as a full update — in particular the old
-     * status is captured before the entity is touched, so a kanban drag that sends only
-     * {@code {"status": "INTERVIEW"}} still produces a correct STATUS_CHANGED event.
-     */
     @Transactional
     public JobApplicationResponseDto patchJob(User user, Integer jobId, JobApplicationPatchDto dto) {
         JobApplication job = findOwnedJob(user, jobId);
@@ -152,11 +137,6 @@ public class JobApplicationService {
         return dto;
     }
 
-    /**
-     * Single choke point for ownership. Every read/write path goes through here, so another
-     * user's job id is indistinguishable from a non-existent one (404, never 403 — a 403
-     * would confirm the id exists).
-     */
     public JobApplication findOwnedJob(User user, Integer jobId) {
         return jobApplicationRepository.findByJobIdAndUser_UserId(jobId, user.getUserId())
                 .orElseThrow(() -> new ResourceNotFoundException("Job application not found"));

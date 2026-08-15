@@ -6,13 +6,6 @@ import org.springframework.stereotype.Component;
 
 import java.util.Set;
 
-/**
- * Identifies a file by its leading bytes rather than the client-supplied Content-Type.
- *
- * <p>The declared type is attacker-controlled — anyone can POST an executable labelled
- * {@code application/pdf}. Magic-byte sniffing is what actually establishes the format. Kept
- * dependency-free (rather than pulling in Tika) because the accepted set here is tiny and fixed.
- */
 @Component
 public class FileTypeDetector {
 

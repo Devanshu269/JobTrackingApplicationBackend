@@ -3,14 +3,6 @@ package com.jobtracker.service;
 import com.jobtracker.service.email.EmailSender;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
-
-/**
- * Owns what emails <i>say</i>. How they are delivered is {@link EmailSender}'s job.
- *
- * <p>The public method signatures are unchanged from the {@code JavaMailSender} version, so
- * {@code AuthService} and {@code ReminderService} needed no edit when the transport was replaced.
- * That is the whole benefit of the split.
- */
 @Service
 @RequiredArgsConstructor
 public class EmailService {

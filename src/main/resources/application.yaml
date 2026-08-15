@@ -10,17 +10,11 @@ spring:
 
   flyway:
     enabled: true
-    # The database already exists and was built by ddl-auto, so there is no migration history.
-    # baseline-on-migrate stamps it as V1 (without running V1) and then applies V2 onward.
-    # A brand-new database instead runs V1 from scratch.
     baseline-on-migrate: true
     baseline-version: 1
 
   jpa:
     hibernate:
-      # Flyway owns the schema now. `validate` makes Hibernate verify the entities match what
-      # the migrations produced and fail fast if they don't — instead of silently "fixing" it,
-      # which is what produced the drift this replaces.
       ddl-auto: validate
     show-sql: true
     properties:
@@ -43,8 +37,6 @@ spring:
 
   servlet:
     multipart:
-      # Outer guard only — the real per-purpose caps (5 MB docs / 2 MB avatars) are enforced in
-      # FilePurpose. This just stops the container buffering something enormous first.
       max-file-size: 6MB
       max-request-size: 8MB
 
@@ -53,21 +45,10 @@ management:
   endpoints:
     web:
       exposure:
-        # ONLY health. The default exposure includes endpoints like `env` and `beans`, which
-        # would hand configuration values and internal wiring to anyone who can reach the port.
         include: health
   endpoint:
     health:
-      # "UP"/"DOWN" and nothing else. The detailed view names the database, its vendor and
-      # validation state — more than an unauthenticated prober has any need for.
-      #
-      # Switchable purely as a diagnostic: set HEALTH_SHOW_DETAILS=always in the environment to
-      # find out WHICH component is failing, then set it back. The aggregate /actuator/health
-      # endpoint hangs on Render for reasons not yet established, and this is how to find out.
       show-details: ${HEALTH_SHOW_DETAILS:never}
-      # Expose the liveness/readiness groups separately. The platform health check uses
-      # /health/liveness, which reports only that the process is running and touches no external
-      # dependency — so a slow or unreachable dependency cannot trigger a restart loop.
       probes:
         enabled: true
 
@@ -81,61 +62,36 @@ cors:
 
 app:
   email:
-    # 'log' prints the email to the console instead of sending it — the default, so a fresh clone
-    # can never mail real people and local runs don't burn the 300/day free tier. 'brevo' delivers
-    # for real over HTTPS. SMTP is gone entirely: Render blocks outbound port 587.
     provider: ${EMAIL_PROVIDER:log}
     from-name: ${EMAIL_FROM_NAME:JobJuggler}
-    # Must be an address verified as a sender in the Brevo dashboard, or sends are rejected.
     from-address: ${EMAIL_FROM_ADDRESS:jobjugglerio@gmail.com}
-    # Reminder mail tells people to just reply, so this has to reach a real inbox.
     reply-to: ${EMAIL_REPLY_TO:jobjugglerio@gmail.com}
     brevo:
-      # Empty is fine — with provider=log the Brevo bean is never created. Each sender validates
-      # its own config in its constructor, so a missing value fails startup with a clear message
-      # rather than booting healthy and discarding mail.
       api-key: ${BREVO_API_KEY:}
     gmail:
-      # A SEPARATE Google Cloud project from the login OAuth app (GOOGLE_CLIENT_ID above). That
-      # consent screen is published and serving user sign-in; gmail.send is a restricted scope
-      # and does not belong on it.
       client-id: ${GMAIL_OAUTH_CLIENT_ID:}
       client-secret: ${GMAIL_OAUTH_CLIENT_SECRET:}
-      # Long-lived ONLY while the consent screen is "In production". In "Testing", Google expires
-      # refresh tokens after 7 days — mail works for a week, then stops with invalid_grant.
       refresh-token: ${GMAIL_OAUTH_REFRESH_TOKEN:}
   oauth2:
     redirect-uri: ${OAUTH2_REDIRECT_URI:http://localhost:5173/oauth2/redirect}
   password-reset:
     redirect-uri: ${PASSWORD_RESET_REDIRECT_URI:http://localhost:5173/reset-password}
     token-expiration-minutes: 30
-    # Per-account cooldown between reset emails. Applied silently — surfacing it as an error
-    # would tell an attacker the address is registered.
     resend-cooldown-minutes: 2
   reminders:
-    # Set REMINDERS_ENABLED=false to stop the scheduler sending real email in dev.
     enabled: ${REMINDERS_ENABLED:true}
-    # 6-field Spring cron (sec min hour dom mon dow). Default: top of every hour.
     cron: ${REMINDERS_CRON:0 0 * * * *}
     batch-size: 50
-    # Backfill guard: follow-ups older than this are skipped permanently rather than emailed.
-    # Stops the first run after enabling (or after downtime) blasting a stale backlog.
     max-overdue-days: ${REMINDERS_MAX_OVERDUE_DAYS:7}
   cleanup:
     enabled: ${CLEANUP_ENABLED:true}
-    # Daily at 03:30.
     cron: ${CLEANUP_CRON:0 30 3 * * *}
 
 jwt:
   secret: ${JWT_SECRET:changeme}
   expiration: 900000
-  # Sliding window: each rotation issues a fresh 7 days.
   refresh-expiration: 604800000
-  # Absolute ceiling from the ORIGINAL login (30 days), so sliding expiry can't
-  # produce an immortal session. Reaching it revokes the family and forces re-login.
   refresh-absolute-expiration: 2592000000
-  # A token replayed within this many seconds of being rotated is treated as two
-  # tabs racing, not theft — it fails that call without revoking the session.
   refresh-rotation-grace-seconds: 30
 
 cloudinary:

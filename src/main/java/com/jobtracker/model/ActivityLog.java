@@ -10,19 +10,6 @@ import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 import java.time.LocalDateTime;
 
-/**
- * Append-only audit trail of job/round mutations.
- *
- * <p><b>Deliberately holds no JPA relationships.</b> {@code userId} and {@code jobId} are plain
- * columns, not {@code @ManyToOne} associations, because an audit log has to outlive the things
- * it audits — a deleted job's history must still render. A real FK would either block the
- * delete outright (FK constraint violation, since cascade is declared per-association and this
- * one wouldn't be covered) or, if an inverse cascade were added, silently erase the very
- * history the table exists to keep.
- *
- * <p>For the same reason {@code companyName}/{@code jobRole} are <b>snapshots</b> taken at write
- * time rather than looked up on read: after the job row is gone there is nothing left to join to.
- */
 @EntityListeners(AuditingEntityListener.class)
 @Table(name = "activity_log", indexes = {
         @Index(name = "idx_activity_user_created", columnList = "user_id, created_at")
