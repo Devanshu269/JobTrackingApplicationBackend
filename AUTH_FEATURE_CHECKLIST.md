@@ -121,7 +121,7 @@ All paths below are relative to the `/jobTracking` context path. The frontend-fa
 - [x] **Deliberately NOT `@Transactional` over the loop.** One transaction would roll back sent-markers for emails that already left the server, and those can't be un-sent — the next tick would deliver duplicates. Each save commits individually, right after its send succeeds
 - [x] Per-job try/catch so one bad address can't abort the batch; a failure leaves `reminderSentAt` null so the row retries next tick
 - [x] Dry-run tested: query selects exactly the due row and excludes future / opt-out / rejected; marking sent drops it out; re-arm and no-false-re-arm both verified
-- [ ] Not tested: actual SMTP delivery of a reminder (deliberate — outward-facing). The transport itself is proven by the password-reset flow
+- [ ] Not tested: actual delivery of a *reminder* (deliberate — outward-facing). The transport itself is proven by the password-reset flow, which delivers for real over the Gmail API
 - [ ] A permanently-failing address retries forever — no attempt counter or dead-letter handling
 - [x] Backfill guard: `app.reminders.max-overdue-days` (default 7) bounds the query below as well as above, so enabling reminders — or recovering from downtime — can't blast a stale backlog
 
@@ -138,6 +138,24 @@ All paths below are relative to the `/jobTracking` context path. The frontend-fa
 - [x] Runtime-tested end-to-end: real PDF and PNG uploaded to Cloudinary; signed URL fetches the PDF (`%PDF` header verified); **unsigned public URL → 404 and unsigned authenticated URL → 401**, while the avatar's public URL → 200; `.txt` renamed `.pdf` → 400; PNG as resume → 400; bad purpose → 400; 7 MB → 413; no token → 401; another user's fileId → 404
 - [ ] Signed-URL *expiry* not directly observed (would need a 5-minute wait) — the `expires_at` parameter is present and Cloudinary enforces it
 - [ ] Nothing ever deletes Cloudinary objects. Deliberate (immutability), but means storage grows forever and orphans accumulate when a job is deleted
+
+## Email transport (2026-08-15) — code-complete, real delivery verified
+- [ ] **Problem 1: production email never worked.** Render blocks outbound SMTP, so `JavaMailSender` hung ~45s on a connection that never completed — `forgot-password` timed out and reminder mail was silently discarded. Nothing logged an error
+- [ ] **Problem 2: swapping to a relay doesn't fix it either.** Gmail/Yahoo/Outlook now enforce DMARC, and Google publishes a policy telling receivers to quarantine mail claiming to be from `@gmail.com` that Google did not send. No third party (Brevo, Resend, SendGrid) can sign for `gmail.com`, so relayed mail from a Gmail From address is spam-filed by design, not by reputation. A domain of your own is the other fix — deferred, since it costs money
+- [ ] **Solution: Gmail's REST API over HTTPS.** Unblocked (port 443, not 587) *and* DMARC-aligned, because the mail genuinely is sent by Google. Free, no domain required. Ceiling is ~500 recipients/day
+- [ ] `EmailSender` interface splits *what an email says* (`EmailService`) from *how it leaves* — the transport swap touched no caller; `AuthService` and `ReminderService` are unchanged
+- [ ] Three implementations chosen by `app.email.provider`: `gmail` (production), `log` (**the default** — prints to console, sends nothing, so a fresh clone can't mail real people and you can copy a reset link out of the terminal), `brevo` (kept for the day a real domain exists)
+- [ ] `AsyncConfig` — `@EnableAsync` plus a 1–2 thread `emailExecutor`, sized for the 512 MB instance. `@Async` sits on the **transport**, not on `EmailService`: Spring's async support is proxy-based, so a method calling its own `@Async` method runs synchronously
+- [ ] Each sender validates its config in its constructor and refuses to start when it's missing — the alternative is an app that boots healthy and discards every password reset
+- [ ] `spring-boot-starter-mail` removed; nothing injects `JavaMailSender` any more
+- [ ] Access token cached until just before expiry, with one forced refresh and retry on a 401
+- [ ] 7 unit tests: startup guard, RFC 5322 header structure, base64 body round-trip, RFC 2047 encoding for non-ASCII subjects, line-length limits
+- [ ] Verified: `forgot-password` returns in ~0.2s (was a 45s hang), real email delivered to a live inbox via the Gmail API, and re-verified after rotating the client secret
+
+## Build reproducibility (2026-08-15)
+- [ ] `mvn test` failed on any machine without `local-secrets.properties` — the generated context-load test starts the whole app, fell back to the placeholder DB password, and Flyway aborted startup. Anyone cloning the repo saw a failing build
+- [ ] Tests now run against in-memory **H2** with Flyway disabled and the schema generated from the entities, plus a test-only `jwt.secret` (the main `changeme` fallback is 64 bits; JJWT requires >= 256 for HMAC-SHA)
+- [ ] Verified from a copy of the tree with both secrets files excluded: 8 tests, 0 failures; `mvn package` produces the jar
 
 ## Schema migrations (Flyway) — replaces ddl-auto, runtime-verified
 - [x] `spring-boot-starter-flyway` + `flyway-mysql`; migrations in `src/main/resources/db/migration`
@@ -232,12 +250,12 @@ All paths below are relative to the `/jobTracking` context path. The frontend-fa
 - [x] Verified via curl: wrong current password → 401; correct change → 204; old password stops working; new password works
 
 ## Forgot / reset password — code-complete, runtime-tested (including real email delivery)
-- [x] Gmail SMTP configured: App Password for `jobjugglerio@gmail.com` in `local-secrets.properties` (`GMAIL_USER`/`GMAIL_APP_PASSWORD`) — **not** the Google account password, a separate SMTP-only credential from myaccount.google.com/apppasswords
+- [x] Email transport: **Gmail REST API over HTTPS**, not SMTP (`GMAIL_OAUTH_CLIENT_ID`/`_CLIENT_SECRET`/`_REFRESH_TOKEN`). Originally a Gmail App Password over SMTP — replaced because Render blocks outbound SMTP entirely. See the Email transport section below
 - [x] `PasswordResetToken` entity/table (`password_reset_tokens`): random UUID token, user FK, expiresAt (30 min, `app.password-reset.token-expiration-minutes`), used flag
-- [x] `EmailService` (`service/`) — thin wrapper around `JavaMailSender`, `sendPasswordResetEmail(to, resetLink)`
+- [x] `EmailService` (`service/`) owns the copy only; delivery is behind the `EmailSender` interface (`service/email/`). `sendPasswordResetEmail(to, resetLink)` unchanged through the transport swap
 - [x] `forgotPassword`: **generic response regardless of outcome** — same 200 whether the email exists, doesn't exist, or belongs to an OAuth-provider account. Deliberate anti-enumeration design (discussed explicitly — don't let the endpoint reveal which emails have accounts)
 - [x] `resetPassword` is `@Transactional` (calls derived `deleteByUser`, which needs it) — single-use token, and a successful reset deletes all that user's refresh tokens (kills every existing session)
-- [x] Verified via curl + direct DB checks: non-existent email → same generic 200, no row created; real LOCAL user → row created, real email sent (no SMTP exception thrown); garbage token → 401; real token → 204; token reused → 401; login with new password → 200; old refresh tokens confirmed gone from DB after reset
+- [x] Verified via curl + direct DB checks: non-existent email → same generic 200, no row created; real LOCAL user → row created, real email sent (originally over SMTP; re-verified end-to-end over the Gmail API on 2026-08-15); garbage token → 401; real token → 204; token reused → 401; login with new password → 200; old refresh tokens confirmed gone from DB after reset
 - [x] Frontend `/reset-password` page — built (src/pages/ResetPasswordPage.jsx). Original spec, kept for reference: reads `token` off the query string (the email link points to `app.password-reset.redirect-uri` + `?token=...`), shows new-password + confirm-password (confirm checked client-side only, same as change-password), submits `{token, newPassword}` to `POST /reset-password`, redirects to login on 204. Should also handle someone landing on `/reset-password` with no `token` in the URL at all (direct navigation, not via the email link) — show a message pointing back to forgot-password instead of a broken form.
 
 ## AuthController — code-complete, runtime-tested
@@ -318,6 +336,9 @@ These are the remaining gaps in User read/update coverage. Deliberately parked �
 
 ## Known housekeeping (low priority)
 - [ ] Rotate local MySQL root password (old value is in earlier git history; local dev DB only, not internet-exposed)
+- [ ] Rotate the **Aiven database password** — it was pasted into a chat transcript. Prod reads `DATABASE_URL` / `DATABASE_USERNAME` / `DATABASE_PASSWORD`; changing it breaks live connections until Render redeploys, so do the two together
+- [ ] Google OAuth **client secret for the mailer** rotated 2026-08-15 after exposure, old secret deleted, new one verified by a real send
+- [ ] **External uptime monitor** (UptimeRobot / cron-job.org) on `/jobTracking/actuator/health/liveness`, every 10 min. Its real value is alerting: the Aiven outage on 2026-08-15 went unnoticed until someone happened to check
 - [ ] This checklist kept in sync as work continues (manual, on your own cadence)
 
 ## Gotchas hit already (avoid re-tripping on these)
@@ -330,7 +351,7 @@ These are the remaining gaps in User read/update coverage. Deliberately parked �
 - Google/GitHub's OAuth2 callback path must match `server.servlet.context-path` exactly — with `context-path: /jobTracking`, the registered redirect URI has to be `.../jobTracking/login/oauth2/code/{registrationId}`, not the bare path.
 - With `oauth2Login()` configured, unauthenticated requests to protected endpoints get redirected to `/login` (302) by default instead of returning 401 — needed a custom `exceptionHandling().authenticationEntryPoint(...)` in `SecurityConfig` to get clean JSON-API-appropriate 401s.
 - GitHub's `/user` endpoint often has `email: null` (private by default) — Spring Security's default `DefaultOAuth2UserService` does NOT automatically fall back to `/user/emails`; needed a custom `OAuth2UserService` to handle it.
-- A Gmail **App Password** (myaccount.google.com/apppasswords) is a separate SMTP-only credential from the actual Google account password — generating one doesn't touch real login security, and it's unrelated to anything about GitHub.
+- A Gmail **App Password** is a separate SMTP-only credential from the Google account password. No longer used here — SMTP is blocked on Render — but worth knowing it never touched real login security. Revoke it once nothing reads it.
 - **JPA cascade is application-level, not database-level.** `@OneToMany(cascade = ALL)` makes `repository.delete(parent)` clean up children, but the actual MySQL FKs have no `ON DELETE CASCADE` — so a raw SQL `DELETE FROM users ...` in DBeaver/CLI still fails with `ERROR 1451` and you must delete children in FK order by hand. Also means a cascade only covers collections the entity actually declares (see the delete-my-account gap above).
 - `ddl-auto: update` also never updates an existing **MySQL ENUM column's** allowed-value list when the Java enum changes. Renaming/adding an enum constant needs a manual `ALTER TABLE ... MODIFY COLUMN x ENUM(...)`. Hit this fixing the `Priority.HiGH` → `HIGH` typo on 2026-08-09 (table was empty, so no data migration was needed — would have been much worse later).
 - Enum constant names are part of the public API — they're the literal strings sent over JSON. `RoundType` is PascalCase (`Technical`, `SystemDesign`) while `Status`/`Priority`/`Outcome` are UPPERCASE; easy to get wrong from the frontend.
@@ -342,3 +363,11 @@ These are the remaining gaps in User read/update coverage. Deliberately parked �
 - **`X-Forwarded-For` must be read from the right-hand end.** Proxies append, so the leftmost entry is whatever the client sent and is trivially forged; the rightmost is what your own proxy actually saw. Taking `split(',')[0]` — which looks correct — makes any IP-based rate limit bypassable with a made-up header.
 - **`LocalDateTime` is stored shifted, and raw SQL against it is a trap.** The JDBC URL sets `serverTimezone=UTC`, so a `LocalDateTime` of `09:00` written from an IST machine lands in MySQL as `03:30`. It round-trips correctly through the API (write 09:00, read 09:00) and Hibernate converts both sides of a query consistently, so application code is fine. But hand-written SQL is not: `follow_up_date <= NOW()` compares a UTC column against a SYSTEM-zone `NOW()` and is off by the UTC offset — verified by a row 2 minutes in the *future* reporting as due. Use `UTC_TIMESTAMP()` in ad-hoc SQL, and expect DBeaver to display shifted times.
 - Ownership checks must be part of the **query**, not a post-fetch `if`. `findByJobIdAndUser_UserId(jobId, userId)` makes "not yours" and "doesn't exist" the same code path, which is what lets every miss return an indistinguishable 404.
+- **Render blocks outbound SMTP.** Any `JavaMailSender` setup hangs ~45s per send and delivers nothing, with no error logged — it looks like the app is simply slow. Port 443 is fine, so an HTTP email API is the fix, not a different SMTP host or port.
+- **You cannot send as `@gmail.com` through a third-party relay.** Google publishes a DMARC policy telling receivers to quarantine mail claiming to be from `gmail.com` that Google didn't send, and no relay can sign for a domain it doesn't own. Brevo flags this as "Not Compliant" up front. Either send through Google's own API, or buy a domain and authenticate that.
+- **`@Async` is proxy-based and needs `@EnableAsync`.** Without the annotation somewhere it's silently inert — the method just runs on the caller's thread, exactly like `flyway-core` without its starter. And a bean calling *its own* `@Async` method bypasses the proxy, so the async boundary has to be a call into a *different* bean. An `@Async void` method also swallows exceptions entirely: catch and log inside it, or failures vanish.
+- **An empty `@Value` default satisfies a placeholder.** `${SOME_KEY:}` resolves to `""`, so a bean requiring that value constructs happily and fails at runtime instead of startup. Validate explicitly in the constructor if the value is mandatory — confirmed by test that the app otherwise boots looking perfectly healthy.
+- **A test-classpath `application.yaml` REPLACES the main one, it does not merge.** Adding one to override the datasource silently removed `cors`, `jwt` and everything else, and the context failed on an unrelated missing property. Use `application-test.yaml` plus `spring.profiles.active=test` in a differently-named file so both layer.
+- **`git commit -a` / `git add -u` do not stage new files.** The email transport was committed as a refactor that imported a package whose files were still untracked — the build worked locally and failed for everyone else, including the deploy. After committing new classes, verify with `git archive HEAD | tar -x -C /tmp/x && (cd /tmp/x && ./mvnw -q clean test)` rather than trusting a green local build.
+- **A powered-off Aiven service withdraws its DNS record.** The symptom is `UnknownHostException` and *total* unreachability — Flyway can't resolve the host at startup, the context fails, the process exits, and Render restart-loops, so even `/actuator/health/liveness` goes dark. Distinguish it in one command: `dig +short <host>` empty while `dig +short aivencloud.com` answers means the service is off or deleted, not a network fault. No uptime pinger prevents this; a monitor's value here is telling you it happened.
+- **Aiven trials get powered off and then deleted.** A free plan stays on; a 30-day trial doesn't. Powering it back on after expiry buys days, not a fix.
