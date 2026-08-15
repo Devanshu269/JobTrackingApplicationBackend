@@ -180,9 +180,19 @@ and reaches the inbox — from a free account, with no domain to buy.
 
 ### One-time setup
 
-1. **New Google Cloud project** — console.cloud.google.com → New Project, e.g. `JobJuggler Mailer`.
-   Keep it **separate from the login OAuth project**: that consent screen is published and serving
-   user sign-in, and `gmail.send` is a restricted scope that does not belong on it.
+1. **New Google Cloud project** — console.cloud.google.com → New Project. This project is named
+   **`JobJugglerEmailService`**. Keep it **separate from the login OAuth project**: that consent
+   screen is published and serving user sign-in, and `gmail.send` is a restricted scope that does
+   not belong on it.
+
+   > The console now calls this area **Google Auth Platform**. Test users and *Publish app* are
+   > under **Audience**, scopes under **Data Access**, and the OAuth client under **Clients**.
+   >
+   > On **Branding**, leave *Application home page*, *Privacy policy* and *Terms of service*
+   > empty. Filling them makes Google demand a matching entry under Authorised domains, which
+   > takes a bare domain (no scheme, no path) that you must own and verify in Search Console —
+   > impossible for a `*.vercel.app` subdomain, since Vercel owns that domain. Nobody but you
+   > ever sees this consent screen, so the links serve no purpose here.
 2. **Enable the API** — APIs & Services → Library → "Gmail API" → Enable.
 3. **OAuth consent screen** — External. Add the scope
    `https://www.googleapis.com/auth/gmail.send`, and add the sending account as a test user.
