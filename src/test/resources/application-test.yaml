@@ -1,0 +1,50 @@
+# Test-only overrides, activated by spring.profiles.active=test in application.properties.
+#
+# Exists so `mvn test` works on a fresh clone with no MySQL running and no local-secrets.properties
+# — otherwise DB_PASSWORD falls back to its placeholder, the real database rejects it, and the
+# context-load test fails for anyone but the original developer.
+#
+# Deliberately a PROFILE file, not application.yaml: a file of that name on the test classpath
+# REPLACES the main one rather than merging with it, which silently removes cors, jwt and every
+# other property the context needs.
+
+spring:
+  datasource:
+    # MySQL compatibility mode so the entity mappings (BOOL columns, etc.) behave as they do in
+    # production. DB_CLOSE_DELAY keeps the schema alive for the whole test run.
+    url: jdbc:h2:mem:jobtracker-test;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+
+  # The migrations are MySQL-specific DDL and are not the thing under test here. Hibernate builds
+  # the schema from the entities instead, which also verifies the mappings are internally valid.
+  flyway:
+    enabled: false
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+    show-sql: false
+
+# HMAC-SHA needs >= 256 bits and JwtUtil uses the raw UTF-8 bytes, so the main config's
+# `changeme` fallback (64 bits) is rejected outright by JJWT. Obviously fake, test-only.
+jwt:
+  secret: test-only-jwt-signing-key-not-a-real-secret-0123456789
+
+# No real mail transport in tests.
+app:
+  email:
+    provider: log
+  reminders:
+    enabled: false
+  cleanup:
+    enabled: false
+
+logging:
+  level:
+    root: WARN
+    com.jobtracker: INFO
