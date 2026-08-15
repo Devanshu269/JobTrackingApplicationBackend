@@ -4,7 +4,7 @@ Spring Boot REST API for **Job Juggler**, a job-application tracker. Serves the 
 the sibling repo `JobTrackingApplicationFrontend`.
 
 **Stack:** Java 17 · Spring Boot 4.1 · Spring Security (JWT + OAuth2) · Spring Data JPA / Hibernate 7 ·
-MySQL 8 · Flyway · Cloudinary · Gmail SMTP · Maven
+MySQL 8 · Flyway · Cloudinary · Gmail API · Maven
 
 ---
 
@@ -33,11 +33,19 @@ loaded automatically via `spring.config.import` in `application.yaml`. The track
 | `JWT_SECRET` | signing access tokens |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google sign-in |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | GitHub sign-in |
-| `GMAIL_USER` / `GMAIL_APP_PASSWORD` | password-reset and reminder email |
+| `GMAIL_OAUTH_CLIENT_ID` / `_CLIENT_SECRET` / `_REFRESH_TOKEN` | password-reset and reminder email |
 | `CLOUDINARY_CLOUD_NAME` / `_API_KEY` / `_API_SECRET` | file upload |
 
-`GMAIL_APP_PASSWORD` is a Google **App Password**, not the account password — a separate
-SMTP-only credential from [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords).
+**Email needs no configuration to run locally.** `EMAIL_PROVIDER` defaults to `log`, which prints
+each message to the console instead of sending it — so a fresh clone cannot mail real people, and
+you can copy a password-reset link straight out of the terminal to test the flow.
+
+To send for real, set `EMAIL_PROVIDER=gmail` and the three `GMAIL_OAUTH_*` values. **Mail goes
+over the Gmail REST API, not SMTP**, for two reasons: many hosts (Render included) block outbound
+SMTP entirely, and Gmail/Yahoo/Outlook now enforce DMARC — no third-party relay can sign for
+`gmail.com`, so relayed mail from a Gmail From address is spam-filed by design. Sending through
+Google's own API is both unblocked and DMARC-aligned. See DEPLOYMENT.md §3b for how to mint the
+refresh token.
 
 ### OAuth2 redirect URIs
 

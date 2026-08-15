@@ -123,6 +123,14 @@
 			<scope>test</scope>
 		</dependency>
 
+		<!-- In-memory database for the context-load test, so `mvn test` passes on a fresh clone
+		     with no local MySQL and no secrets file. See src/test/resources/application.yaml. -->
+		<dependency>
+			<groupId>com.h2database</groupId>
+			<artifactId>h2</artifactId>
+			<scope>test</scope>
+		</dependency>
+
 	</dependencies>
 
 	<build>
