@@ -54,17 +54,21 @@ Use any free uptime monitor — [UptimeRobot](https://uptimerobot.com) or
 
 | Setting | Value |
 |---|---|
-| URL | `https://jobtrackingapplicationbackend.onrender.com/jobTracking/actuator/health` |
+| URL | `https://jobtrackingapplicationbackend.onrender.com/jobTracking/actuator/health/liveness` |
 | Method | `GET` |
 | Interval | **every 10 minutes** (must be under Render's ~15 min idle window) |
 | Expected status | `200` |
 
-`/actuator/health` is the right target: it needs no authentication, returns in milliseconds, and
-its `200`/`503` doubles as genuine uptime monitoring — you get alerted if the database connection
-drops, not just if the process died.
+**Use `/health/liveness`, not `/health`.** The aggregate endpoint was measured on Render at
+**503 DOWN after 135 seconds** — with the mail indicator already disabled, so blocked SMTP was not
+the cause and that hypothesis is dead. Any monitor with a normal 30s timeout would record it as
+permanently down and alert continuously. `liveness` checks no external dependency and answers in
+milliseconds.
 
-> Requires the mail health indicator to stay disabled (`management.health.mail.enabled: false`).
-> With it on, this endpoint hangs on Render's blocked SMTP port and every ping times out.
+The honest trade: liveness reports only "the process is running". It cannot tell you the database
+is reachable, and given the aggregate endpoint currently says DOWN, there is a real unresolved
+problem here that a green liveness check will hide. Keeping the service awake and knowing it is
+healthy are two different jobs; this does the first.
 
 **Two caveats, worth knowing before relying on it:**
 
@@ -161,6 +165,91 @@ both providers currently only know the localhost callbacks.
       Google's "access blocked" screen — which looks like a bug in your app but isn't.
 
 Note these are the **backend** domain with `/jobTracking`, not the Vercel one.
+
+## 3b. Email (Gmail API)
+
+Email does **not** go over SMTP. Render blocks outbound SMTP, so `JavaMailSender` hung ~45s per
+send and delivered nothing — `forgot-password` timed out and reminder mail never arrived.
+
+The replacement sends through Gmail's REST API over HTTPS. That fixes a second problem at the
+same time: Gmail, Yahoo and Outlook now enforce DMARC, and Google publishes a policy telling
+receivers to quarantine mail claiming to be from `@gmail.com` that Google did not send. No
+third-party relay (Brevo, Resend, SendGrid) can sign for `gmail.com`, so relayed mail from a
+Gmail From address is spam-filed by design. Sending through Google's own API is DMARC-aligned
+and reaches the inbox — from a free account, with no domain to buy.
+
+### One-time setup
+
+1. **New Google Cloud project** — console.cloud.google.com → New Project, e.g. `JobJuggler Mailer`.
+   Keep it **separate from the login OAuth project**: that consent screen is published and serving
+   user sign-in, and `gmail.send` is a restricted scope that does not belong on it.
+2. **Enable the API** — APIs & Services → Library → "Gmail API" → Enable.
+3. **OAuth consent screen** — External. Add the scope
+   `https://www.googleapis.com/auth/gmail.send`, and add the sending account as a test user.
+   > **Then click Publish app, so the status reads "In production".** While it stays in
+   > "Testing", Google expires refresh tokens after **7 days** — mail works for a week and then
+   > stops with `invalid_grant`. Published-but-unverified is fine here: you are the only person
+   > who ever grants consent, and the cost is one "Google hasn't verified this app" warning
+   > (Advanced → Go to … ) during step 5.
+4. **Create credentials** — Credentials → Create Credentials → OAuth client ID →
+   **Web application**. Add `https://developers.google.com/oauthplayground` as an authorized
+   redirect URI. Copy the client ID and secret.
+5. **Mint the refresh token** — open
+   [OAuth 2.0 Playground](https://developers.google.com/oauthplayground):
+   - Gear icon → tick **Use your own OAuth credentials** → paste the client ID and secret
+   - Select scope `https://www.googleapis.com/auth/gmail.send`
+   - **Authorize APIs**, sign in as the sending account, accept the unverified-app warning
+   - **Exchange authorization code for tokens** → copy the **refresh token**
+
+   The refresh token is shown once. It does not expire (given step 3), but it is a credential:
+   store it, don't paste it into a chat or a commit.
+
+### Environment variables
+
+| Key | Notes |
+|---|---|
+| `GMAIL_OAUTH_CLIENT_ID` | From step 4. Distinct from `GOOGLE_CLIENT_ID`, which is user login. |
+| `GMAIL_OAUTH_CLIENT_SECRET` | From step 4. |
+| `GMAIL_OAUTH_REFRESH_TOKEN` | From step 5. |
+| `EMAIL_FROM_ADDRESS` | Must be the account that granted consent. |
+| `EMAIL_REPLY_TO` | Where replies land. |
+| `EMAIL_PROVIDER` | Defaults to `gmail` in prod, `log` locally. Optional. |
+
+`GMAIL_USER` and `GMAIL_APP_PASSWORD` are obsolete — delete them. Nothing reads them, and the
+Gmail App Password should be revoked in the Google account.
+
+**A missing value fails the deploy at startup**, by design: `GmailApiEmailSender` validates its
+config in its constructor and names the variable. The alternative is an app that boots healthy
+and silently discards every password reset.
+
+### Providers
+
+Selected by `app.email.provider`:
+
+| Value | Behaviour |
+|---|---|
+| `gmail` | Gmail REST API. The production transport. |
+| `log` | Prints the email to the console, sends nothing. **The default**, so a fresh clone can't mail real people and local dev doesn't need credentials. Also how you copy a reset link out of the console while testing. |
+| `brevo` | Brevo's HTTPS API. Kept for the day a real domain is bought — authenticate the domain in Brevo and send from `noreply@`, which removes the 500/day Gmail ceiling. Not usable with a `@gmail.com` From address, per the DMARC note above. |
+
+Local development needs no email configuration at all. Set `EMAIL_PROVIDER=gmail` in
+`local-secrets.properties` only when testing a real send.
+
+### Verifying
+
+After deploy, trigger a reset for an account you control and check the logs:
+
+```
+Email sent via Gmail API to d*******@gmail.com (subject: Reset your JobTracker password)
+```
+
+Failures are logged, never thrown — a mail outage must not roll back the business flow that
+triggered it. So a silent absence of that line means look at the log, not at the response:
+`invalid_grant` means the refresh token died (consent screen back in "Testing"?), `403` usually
+means the scope is missing from the token.
+
+Sending happens on a background executor, so the HTTP response returns immediately and the log
+line appears a moment later on an `email-*` thread.
 
 ## 4. Frontend (Vercel)
 
@@ -307,8 +396,14 @@ suite to catch a regression before deploy — review diffs accordingly.
 ### Free-tier sleep breaks scheduled jobs
 
 Covered in step 0. In short: a sleeping process runs no `@Scheduled` work, so reminders and token
-cleanup only fire when the app happens to be awake. The external pinger above is what makes them
-dependable on the free tier.
+cleanup only fire when the app happens to be awake. The external pinger above keeps the scheduler
+running.
+
+> **The pinger fixes the scheduler, not email.** Render blocks outbound SMTP, so
+> `JavaMailSender` times out and reminder mail is not delivered even on a fully awake instance —
+> `forgot-password` shows the same 45s timeout. Until `EmailService` moves to an HTTP email
+> provider (Resend, Brevo, SendGrid), an awake instance produces reminder attempts that fail
+> rather than reminder emails. Token cleanup, which touches no mail, does start working.
 
 ### First reminder run
 
@@ -318,6 +413,51 @@ follow-ups on its first production run. If you seed or import historical data wi
 `REMINDERS_ENABLED=false` for the first hour.
 
 ---
+
+## Database disappeared (`UnknownHostException`)
+
+Symptom: nothing responds at all — not the API, not `/actuator/health/liveness` — and Render's
+logs show the same stack trace repeating, ending in:
+
+```
+java.net.UnknownHostException: jobtracking-jobjuggler.h.aivencloud.com: Name or service not known
+```
+
+**This is DNS, not the database refusing the connection.** Aiven withdraws the hostname's DNS
+record when a service is powered off or deleted. Confirm from anywhere:
+
+```bash
+dig +short jobtracking-jobjuggler.h.aivencloud.com   # empty  -> service is off/gone
+dig +short aivencloud.com                            # answers -> Aiven's DNS is fine
+```
+
+### Why the whole app dies, not just database features
+
+Flyway runs during startup. It cannot resolve the host, `flywayInitializer` fails, the Spring
+context fails, the process exits, Render restarts it, and it fails again — a crash loop. There is
+no live process to answer a health check, which is why even liveness goes dark.
+
+That is correct behaviour, not a bug to fix. With `ddl-auto: validate` and migrations owning the
+schema, booting without a database would only serve 500s while looking healthy. **It does mean an
+uptime pinger cannot help here** — the pinger's value in this scenario is telling you it happened.
+
+### Fixing it
+
+Aiven console → find the service:
+
+| State | Action |
+|---|---|
+| Powered off | Power on. Data is retained and the hostname returns, so Render's existing env vars keep working — nothing to change. |
+| Deleted | Check Aiven's recovery window. Past it, the data is gone and the database must be recreated. |
+| Trial expired | Powering on buys days, not a fix: expired trials get deleted after a grace period. Move to a free plan or add billing. |
+
+**Check which plan it is.** A free plan (single node, ~5 GB) stays on. A 30-day trial ends, and
+this recurs.
+
+If it must be recreated, the host, port and password all change — update `SPRING_DATASOURCE_URL`,
+`SPRING_DATASOURCE_USERNAME` and `SPRING_DATASOURCE_PASSWORD` in Render. Flyway then applies
+V1–V4 to the empty database, so the schema rebuilds itself completely. Only the data is lost.
+Cloudinary still holds uploaded files, but the rows pointing at them would be gone.
 
 ## Rollback
 
@@ -340,6 +480,7 @@ follow-ups on its first production run. If you seed or import historical data wi
 | Deploy marked failed, health check times out | `PORT` not honoured. It's `${PORT:8080}` — don't override it. Also check the health check path includes `/jobTracking`. |
 | First request of the day takes ~50s, then everything is fine | Render free tier cold start. See step 0. |
 | Reminder emails never arrive in production | Render free tier sleeping — no process, no scheduler. See step 0. |
+| **Service totally unreachable — even `/liveness` — and logs show `UnknownHostException: …aivencloud.com`** | **The Aiven service is powered off or deleted.** See "Database disappeared" below. Not a Render problem, and no pinger prevents it. |
 | `Communications link failure` / SSL errors from MySQL | `sslMode=REQUIRED` missing from the JDBC URL. Aiven refuses plaintext. |
 | Intermittent `too many connections` | `DB_POOL_SIZE` too high for the Aiven plan, or a DBeaver session holding connections. |
 | OAuth2 redirects to `http://` and the provider rejects it | `forward-headers-strategy: framework` missing. It's set — check it wasn't overridden. |

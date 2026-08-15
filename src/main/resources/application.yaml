@@ -48,17 +48,6 @@ spring:
       max-file-size: 6MB
       max-request-size: 8MB
 
-  mail:
-    host: smtp.gmail.com
-    port: 587
-    username: ${GMAIL_USER:placeholder}
-    password: ${GMAIL_APP_PASSWORD:placeholder}
-    properties:
-      mail:
-        smtp:
-          auth: true
-          starttls:
-            enable: true
 
 management:
   endpoints:
@@ -91,6 +80,30 @@ cors:
   allowed-origin: ${CORS_ALLOWED_ORIGIN:http://localhost:5173}
 
 app:
+  email:
+    # 'log' prints the email to the console instead of sending it — the default, so a fresh clone
+    # can never mail real people and local runs don't burn the 300/day free tier. 'brevo' delivers
+    # for real over HTTPS. SMTP is gone entirely: Render blocks outbound port 587.
+    provider: ${EMAIL_PROVIDER:log}
+    from-name: ${EMAIL_FROM_NAME:JobJuggler}
+    # Must be an address verified as a sender in the Brevo dashboard, or sends are rejected.
+    from-address: ${EMAIL_FROM_ADDRESS:jobjugglerio@gmail.com}
+    # Reminder mail tells people to just reply, so this has to reach a real inbox.
+    reply-to: ${EMAIL_REPLY_TO:jobjugglerio@gmail.com}
+    brevo:
+      # Empty is fine — with provider=log the Brevo bean is never created. Each sender validates
+      # its own config in its constructor, so a missing value fails startup with a clear message
+      # rather than booting healthy and discarding mail.
+      api-key: ${BREVO_API_KEY:}
+    gmail:
+      # A SEPARATE Google Cloud project from the login OAuth app (GOOGLE_CLIENT_ID above). That
+      # consent screen is published and serving user sign-in; gmail.send is a restricted scope
+      # and does not belong on it.
+      client-id: ${GMAIL_OAUTH_CLIENT_ID:}
+      client-secret: ${GMAIL_OAUTH_CLIENT_SECRET:}
+      # Long-lived ONLY while the consent screen is "In production". In "Testing", Google expires
+      # refresh tokens after 7 days — mail works for a week, then stops with invalid_grant.
+      refresh-token: ${GMAIL_OAUTH_REFRESH_TOKEN:}
   oauth2:
     redirect-uri: ${OAUTH2_REDIRECT_URI:http://localhost:5173/oauth2/redirect}
   password-reset:

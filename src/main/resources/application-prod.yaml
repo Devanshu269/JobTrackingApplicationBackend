@@ -66,12 +66,6 @@ spring:
       hibernate:
         format_sql: false
 
-  mail:
-    host: smtp.gmail.com
-    port: 587
-    username: ${GMAIL_USER}
-    password: ${GMAIL_APP_PASSWORD}
-
   security:
     oauth2:
       client:
@@ -126,6 +120,26 @@ cors:
   allowed-origin: ${CORS_ALLOWED_ORIGIN:https://job-tracking-application-frontend.vercel.app}
 
 app:
+  email:
+    # Gmail's REST API over HTTPS. Two problems, one solution:
+    #   1. Render blocks outbound SMTP, so JavaMailSender hung ~45s and delivered nothing.
+    #   2. Gmail/Yahoo/Outlook now enforce DMARC, and no third-party relay can sign for
+    #      gmail.com — so Brevo-relayed mail from this From address is spam-filed by design.
+    # Sending through Google's own API is HTTPS (not blocked) and DMARC-aligned (not spam).
+    # Set EMAIL_PROVIDER=brevo to switch relays if a real domain is bought later.
+    provider: ${EMAIL_PROVIDER:gmail}
+    from-name: ${EMAIL_FROM_NAME:JobJuggler}
+    from-address: ${EMAIL_FROM_ADDRESS:jobjugglerio@gmail.com}
+    reply-to: ${EMAIL_REPLY_TO:jobjugglerio@gmail.com}
+    brevo:
+      api-key: ${BREVO_API_KEY:}
+    gmail:
+      # Empty defaults, but GmailApiEmailSender refuses to start without them — a missing value
+      # stops the deploy with a named message instead of booting healthy and quietly discarding
+      # every password reset.
+      client-id: ${GMAIL_OAUTH_CLIENT_ID:}
+      client-secret: ${GMAIL_OAUTH_CLIENT_SECRET:}
+      refresh-token: ${GMAIL_OAUTH_REFRESH_TOKEN:}
   oauth2:
     # Where the backend sends the browser once OAuth2 completes, carrying ?code=…
     # Verified against the frontend router: /oauth2/redirect sits at the ROOT, not under
@@ -157,14 +171,12 @@ cloudinary:
   api-key: ${CLOUDINARY_API_KEY}
   api-secret: ${CLOUDINARY_API_SECRET}
 
-management:
-  health:
-    mail:
-      # OFF. Render blocks outbound SMTP, so this indicator hangs on a connection that never
-      # completes — taking /actuator/health with it and making the platform's probe time out.
-      # Health should answer "can this app serve requests", and Gmail being unreachable does not
-      # change that answer. Confirmed live: forgot-password times out after 45s on Render.
-      enabled: false
+# The mail health indicator is gone with spring-boot-starter-mail, so there is no longer an
+# indicator to disable here. Worth watching: /actuator/health was returning 503 after 135s even
+# with management.health.mail.enabled=false set, which meant the flag was not taking effect or
+# mail was never the cause. Removing the starter settles it — if the aggregate endpoint answers
+# after this deploy, mail was the culprit; if it still hangs, mail is definitively ruled out.
+# The platform probe uses /actuator/health/liveness either way and is unaffected.
 
 logging:
   level:
